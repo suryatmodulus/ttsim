@@ -102,6 +102,26 @@ To ensure an exact match with silicon, avoid algorithms where the runtime order 
 affects the result. For example, floating-point reductions using addition will diverge unless each
 addition is explicitly serialized in a deterministic order.
 
+### Strictness vs. Silicon
+The simulator may report `UndefinedBehavior` or `UnpredictableValueUsed` for conditions that do not
+produce visibly incorrect output on silicon under specific test workloads. This is by design.
+UndefinedBehavior is not equivalent to "the device halts on this input"; it is the specification's
+commitment that no behavior is guaranteed. Silicon executes some behavior on every input, and the
+absence of a visible failure in a particular test does not constitute a defined contract. The
+simulator's role is to flag the nonconformance at the point it occurs, before it propagates into a
+non-portable correctness failure under a different workload, format combination, or silicon revision.
+
+When the simulator reports such a condition, the resolution is to fix the software path that triggered
+it. Suppressing or relaxing the simulator's check would convert a portable, locally detectable
+correctness failure into a silent corruption risk that is non-portable across configurations and
+revisions - strictly worse than the current state.
+
+If a particular check appears to be incorrect, i.e., the underlying spec case should be defined rather
+than UndefinedBehavior, then the correct resolution is to update the specification with the evidence
+described in the [Glossary's UndefinedBehavior entry](https://github.com/tenstorrent/tt-isa-documentation/blob/main/Glossary.md#undefinedbehavior),
+after which the simulator's check is updated to match. The simulator and the specification stay in
+lockstep; neither is relaxed independently.
+
 ## Contributing
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
