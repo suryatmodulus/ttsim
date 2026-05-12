@@ -122,6 +122,32 @@ described in the [Glossary's UndefinedBehavior entry](https://github.com/tenstor
 after which the simulator's check is updated to match. The simulator and the specification stay in
 lockstep; neither is relaxed independently.
 
+### UnsupportedFunctionality
+`UnsupportedFunctionality` describes hardware features that exist in silicon but are deliberately
+not implemented in `ttsim`. The category is distinct from `UnimplementedFunctionality` (planned
+future work): an `UnsupportedFunctionality` error means the feature is intentionally absent. A
+modern AI accelerator has on the order of several thousand distinct architectural features per
+generation, the substantial majority of which `ttsim` implements for Wormhole and Blackhole; much
+of the remainder is intentionally left as `UnsupportedFunctionality` and is not a backlog of work
+to be eventually completed. Common reasons a feature is unsupported include: features intended for
+silicon bring-up or factory test rather than production use; features with known hardware bugs
+whose simulator replication would constrain future silicon revisions; features without a published
+ISA specification; and features where the simulator offers superior alternatives (e.g. arbitrary
+debug visibility via source-level modification is more useful than reproducing a silicon debug-bus
+mechanism).
+
+In most cases, software encountering an `UnsupportedFunctionality` error can achieve the desired
+outcome by using a documented alternative path, restructuring the algorithm, or accepting the
+feature's absence - this is the intended use of an architecture in which not every feature is
+supported by every tool. Software with a genuine need for a feature currently marked
+`UnsupportedFunctionality` may request its promotion to the planned-work backlog with sufficient
+justification (specific real workload, concrete quantified benefit, alternatives evaluated,
+acknowledgment of implementation cost, and confirmation that an ISA specification exists). The bar
+for promotion tightens over time as `ttsim`'s workload coverage grows: features not exercised by
+any real workload to date are increasingly unlikely to provide enough value to justify
+implementation cost, and the prior on "genuinely needed but not yet hit" continues to shift
+downward as more workloads run.
+
 ## Contributing
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
