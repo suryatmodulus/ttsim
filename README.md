@@ -1,12 +1,12 @@
 # ttsim, a fast full-system simulator of Tenstorrent hardware
 
-`ttsim` provides a virtual Wormhole or Blackhole device that can run on any Linux/x86_64 system
-(including Windows via WSL2), without Tenstorrent silicon required. It is slower than silicon but
-still fast enough that you can run interesting workloads with good productivity, allowing you to
+`ttsim` provides a virtual Wormhole, Blackhole, or Quasar device that can run on any Linux/x86_64
+system (including Windows via WSL2), without Tenstorrent silicon required. It is slower than silicon
+but still fast enough that you can run interesting workloads with good productivity, allowing you to
 explore and experiment with Tenstorrent's hardware and programming model before purchasing silicon.
 
 Each simulator consists of a single `libttsim.so` file compiled for a specific chip architecture
-(Wormhole or Blackhole). This library exports a simple API that [TT-Metalium](https://github.com/tenstorrent/tt-metal)
+(Wormhole, Blackhole, or Quasar). This library exports a simple API that [TT-Metalium](https://github.com/tenstorrent/tt-metal)
 knows how to communicate with.
 
 ## Distribution
@@ -17,6 +17,9 @@ to download the latest version.
 ## Chip Status
 - **Wormhole/Blackhole**: Nearing feature complete, with a small number of remaining features and
   bugs under active debug. Can run many tt-metal, ttnn, tt-forge, and LLK examples/tests.
+
+- **Quasar**: DM cores and TRISCs can be taken out of reset. RV32/64 code and simple NOC transfers work.
+  More tests and features are under active debug and bringup.
 
 ## Getting Started
 
@@ -35,6 +38,7 @@ cd ~/sim
 # Download simulators
 wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_wh.so
 wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_bh.so
+wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_qsr.so
 ```
 
 ### Running with TT-Metalium
@@ -60,11 +64,26 @@ cd $TT_METAL_HOME
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_add_2_integers_in_riscv
 ```
 
+#### Quasar
+```bash
+export TT_METAL_SIMULATOR=~/sim/libttsim_qsr.so
+cp $TT_METAL_HOME/tt_metal/soc_descriptors/quasar_32_arch.yaml ~/sim/soc_descriptor.yaml
+
+cd $TT_METAL_HOME
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_legacy --gtest_filter=QuasarMeshDeviceSingleCardFixture.SingleDmL1Write
+```
+
 ## Known Issues
 **Fast dispatch is not working**. The simulator side is believed to be functioning and correct,
 but some tt-metal fixes are not yet merged. You must set `TT_METAL_SLOW_DISPATCH_MODE=1`.
 
 SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
+
+Quasar support is in early stages and testing is incomplete. The unit_tests_legacy test listed above was
+validated against tt-metal commit `d28e155c06197bd11a1b50b5612d55ca1014d739`; a regression on more recent
+tt-metal main is under investigation, so pin to this commit when trying the Quasar flow. Additionally,
+tests exercising the NOC currently require commenting out `#define NOC_API_V2` in
+`tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h`.
 
 Not all hardware features are implemented, and the simulator is intentionally more restrictive than silicon
 to help uncover potential issues. Simulator error messages are grouped into the following categories
