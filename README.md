@@ -98,6 +98,13 @@ to indicate whether the simulator or the software being simulated is at fault:
   or configuration files
 - **AssertionFailure**: Internal simulator bug
 
+## Simulator Behavior Contract
+`ttsim` is not just a simulator: it is also the official golden reference implementation of the
+Tenstorrent ISA contract, designed and operated to a level of rigor that supports pre-silicon
+validation in safety-critical and regulated workflows (e.g. ISO 26262/DO-254). The future public
+source release, the strict spec/simulator coupling, and the explicit conformance taxonomy are all
+aimed at customers who need evidence, not promises.
+
 ### Numerical Accuracy
 `ttsim` is designed to provide **bit-exact** numerical results relative to silicon for all
 computations, floating point and otherwise. The goal is to match all hardware computations
@@ -165,6 +172,22 @@ for promotion tightens over time as `ttsim`'s workload coverage grows: features 
 any real workload to date are increasingly unlikely to provide enough value to justify
 implementation cost, and the prior on "genuinely needed but not yet hit" continues to shift
 downward as more workloads run.
+
+### Simulator-Specific Software Conditionals
+In all of the above, it has been assumed that all host and device code follows the same logic paths
+that would execute on real silicon.
+
+Simulator-specific conditionals, detection flags, or alternate code paths break this equivalence.
+Such behavior may cause the simulator to produce incorrect functional or performance results and
+is therefore **unsupported**.
+
+To ensure results are meaningful:
+- Build and run identical host and device binaries for both simulator and silicon.
+- Do not add compile-time or runtime checks that detect the simulator environment.
+- Report issues only when they reproduce under the same code path that runs on hardware.
+
+The simulator's value depends on its fidelity to hardware behavior. Divergent software paths
+undermine that fidelity and are not part of the supported model.
 
 ## Contributing
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
