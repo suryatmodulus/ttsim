@@ -1,16 +1,17 @@
 # ttsim, a fast full-system simulator of Tenstorrent hardware
 
 `ttsim` provides a virtual Wormhole, Blackhole, or Quasar device that can run on any Linux/x86_64
-system (including Windows via WSL2), without Tenstorrent silicon required. It is slower than silicon
-but still fast enough that you can run interesting workloads with good productivity, allowing you to
-explore and experiment with Tenstorrent's hardware and programming model before purchasing silicon.
+or Linux/aarch64 system (including Windows via WSL2 and macOS via UTM/QEMU), without Tenstorrent
+silicon required. It is slower than silicon but still fast enough that you can run interesting
+workloads with good productivity, allowing you to explore and experiment with Tenstorrent's hardware
+and programming model before purchasing silicon.
 
 Each simulator consists of a single `libttsim.so` file compiled for a specific chip architecture
 (Wormhole, Blackhole, or Quasar). This library exports a simple API that [TT-Metalium](https://github.com/tenstorrent/tt-metal)
 knows how to communicate with.
 
 ## Distribution
-We currently provide binary releases for Linux/x86_64 only, with plans to release source
+We currently provide binary releases for Linux/x86_64 and Linux/aarch64 only, with plans to release source
 code in the future under the Apache License. Visit the [latest release page](https://github.com/tenstorrent/ttsim/releases/latest)
 to download the latest version.
 
@@ -40,6 +41,8 @@ wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_wh.so
 wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_bh.so
 wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_qsr.so
 ```
+
+Linux/aarch64 binary releases are suffixed with `_aarch64`, e.g., `libttsim_wh_aarch64.so`.
 
 ### Running with TT-Metalium
 Metal has simulator support out of the box, enabled by setting the `TT_METAL_SIMULATOR`
@@ -102,10 +105,10 @@ to indicate whether the simulator or the software being simulated is at fault:
 
 ## Simulator Behavior Contract
 `ttsim` is not just a simulator: it is also the official golden reference implementation of the
-Tenstorrent ISA contract, designed and operated to a level of rigor that supports pre-silicon
-validation in safety-critical and regulated workflows (e.g. ISO 26262/DO-254). The future public
-source release, the strict spec/simulator coupling, and the explicit conformance taxonomy are all
-aimed at customers who need evidence, not promises.
+Tenstorrent ISA contract, designed to a level of rigor that supports pre-silicon validation in
+safety-critical and regulated workflows (e.g. ISO 26262/DO-254). The future public source release,
+the strict spec/simulator coupling, and the explicit conformance taxonomy are all aimed at
+customers who need evidence, not promises.
 
 ### Numerical Accuracy
 `ttsim` is designed to provide **bit-exact** numerical results relative to silicon for all
