@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# libttsim.so exposes the device's physical I/O interfaces (e.g. PCIE, Ethernet).  These
+# symbols form a stable, binary-compatible API intended for long-term use; changes should
+# be rare and should always correspond to physical ports/connectivity on the device.
+{
+    global:
+        libttsim_init;
+        libttsim_exit;
+        libttsim_set_pci_dma_mem_callbacks;
+        libttsim_pci_config_rd32;
+        libttsim_pci_config_wr32;
+        libttsim_pci_mem_rd_bytes;
+        libttsim_pci_mem_wr_bytes;
+        libttsim_tile_rd_bytes; # deprecated and will eventually be removed
+        libttsim_tile_wr_bytes; # deprecated and will eventually be removed
+        libttsim_clock;
+    local:
+        *;
+};

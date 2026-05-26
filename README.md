@@ -11,9 +11,10 @@ Each simulator consists of a single `libttsim.so` file compiled for a specific c
 knows how to communicate with.
 
 ## Distribution
-We currently provide binary releases for Linux/x86_64 and Linux/aarch64 only, with plans to release source
-code in the future under the Apache License. Visit the [latest release page](https://github.com/tenstorrent/ttsim/releases/latest)
-to download the latest version.
+This repository contains the open-source `ttsim` source code for Wormhole and Blackhole, released
+under the Apache License 2.0. Prebuilt binaries for Wormhole, Blackhole, and Quasar for both Linux/x86_64
+and Linux/aarch64 are also provided via [GitHub Releases](https://github.com/tenstorrent/ttsim/releases/latest);
+Quasar is pre-silicon and ships as a binary only.
 
 ## Chip Status
 - **Wormhole/Blackhole**: Nearing feature complete, with a small number of remaining features and
@@ -43,6 +44,18 @@ wget https://github.com/tenstorrent/ttsim/releases/download/vX.Y/libttsim_qsr.so
 ```
 
 Linux/aarch64 binary releases are suffixed with `_aarch64`, e.g., `libttsim_wh_aarch64.so`.
+
+### Building from Source (Wormhole and Blackhole)
+The included source can be built locally:
+
+```bash
+./make.py :build
+```
+
+Requires g++ with C++20 support and Python 3.8+. Builds release `.so` files at
+`src/_out/release_wh/libttsim.so` and `src/_out/release_bh/libttsim.so`, functionally
+equivalent to the corresponding GitHub Releases binaries (and byte-identical when built
+on the same toolchain as our release CI: `ubuntu-22.04` with its default g++).
 
 ### Running with TT-Metalium
 Metal has simulator support out of the box, enabled by setting the `TT_METAL_SIMULATOR`
@@ -107,9 +120,9 @@ to indicate whether the simulator or the software being simulated is at fault:
 `ttsim` serves both as a general-purpose pre-silicon AI accelerator simulator and as the official
 golden reference implementation of the Tenstorrent ISA contract, designed to a level of rigor that
 supports pre-silicon validation in safety-critical and regulated workflows (e.g. ISO 26262, DO-254,
-IEC 62304/FDA software-as-medical-device guidance). The future public source release, the strict
-spec/simulator coupling, and the explicit conformance taxonomy are all aimed at customers who need
-evidence, not promises.
+IEC 62304/FDA software-as-medical-device guidance). The public source release, the public/private
+binary-equivalence commitment, the strict spec/simulator coupling, and the explicit conformance
+taxonomy are all aimed at customers who need evidence, not promises.
 
 Beyond regulated industries specifically, the same discipline underpins the long-horizon
 commitments enterprise deployments depend on: software portability and forwards/backwards
@@ -208,7 +221,7 @@ undermine that fidelity and are not part of the supported model.
 We welcome bug reports and feature requests! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 **Note:** We do not accept pull requests. All development happens in an internal repository, and this
-public repository contains filtered binary releases. Please file issues for bugs or suggestions.
+public repository contains filtered source and binary releases. Please file issues for bugs or suggestions.
 
 ## Support and Issues
 If you encounter problems:

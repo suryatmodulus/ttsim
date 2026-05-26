@@ -2,7 +2,7 @@
 Thank you for your interest in contributing to the `ttsim` simulator project!
 
 ## Current Status
-We currently provide binary releases only, with plans to release source code in the future under the Apache License.
+This repository provides binary releases (via GitHub Releases) and the filtered open-source source for `ttsim`, licensed under Apache 2.0.
 
 ## Code of Conduct
 This project adheres to the Contributor Covenant [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to [opensource@tenstorrent.com](mailto:opensource@tenstorrent.com).
@@ -29,9 +29,9 @@ Before filing a new issue, please search existing issues to see if your topic ha
 helps keep our issue tracker organized and prevents duplicate reports.
 
 ### Pull Requests
-We do not accept pull requests for this project. This policy will remain in place even after source code is released, as the public source will be a filtered version of our internal repository that doesn't support the standard PR workflow.
+We do not accept pull requests. The public source is a filtered export of our internal repository, and the workflow for accepting external code changes against that boundary has not been established. Whether public contributions will eventually be enabled is an open question.
 
-For any code-related suggestions or contributions, please file an issue instead where we can discuss the best approach.
+For code-related suggestions or feedback, please file an issue.
 
 ## Questions?
 Feel free to [open an issue](https://github.com/tenstorrent/ttsim/issues) if you have any questions about contributing or using `ttsim`.
