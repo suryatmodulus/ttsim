@@ -105,7 +105,8 @@ require commenting out `#define NOC_API_V2` in `tt_metal/hw/inc/internal/tt-2xx/
 
 Not all hardware features are implemented, and the simulator is intentionally more restrictive than silicon
 to help uncover potential issues. Simulator error messages are grouped into the following categories
-to indicate whether the simulator or the software being simulated is at fault:
+to indicate whether the simulator or the software being simulated is at fault (see
+[Simulator Error Handling](docs/sim_error_handling.md) for the full design rationale):
 - **UndefinedBehavior, UnpredictableValueUsed, NonContractualBehavior**: See
   [tt-isa-documentation glossary](https://github.com/tenstorrent/tt-isa-documentation/blob/main/Glossary.md)
 - **UntestedFunctionality**: Feature is implemented but lacks sufficient test coverage to be enabled
