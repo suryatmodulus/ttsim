@@ -126,6 +126,7 @@ Design data structures with serialization in mind:
 
 ## File Organization
 
+- `.github/` - CI workflows
 - `data/` - hardware specifications (do not edit manually)
 - `docs/` - design docs
 - `src/` - source code

@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Builds the simulator on x86_64 and aarch64 to verify the public source remains buildable on every change.
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-22.04-arm]
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v6
+
+    - name: Build Simulator
+      run: |
+        ./make.py :build
+
+    - name: Hash Build Outputs
+      run: |
+        sha256sum src/_out/{debug,release}_{wh,bh}/libttsim.so
