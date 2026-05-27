@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This is a Tenstorrent hardware simulator and official ISA golden reference model, not idiomatic modern C++, and use cases include safety-critical markets. Before writing or editing code, read the **Simulator Behavior Contract in `README.md`**. The rules there are tightly enforced.
+This is a Tenstorrent hardware simulator and official ISA golden reference model, not idiomatic modern C++, and use cases include safety-critical markets. Before writing or editing code, read **`CODING_CONVENTIONS.md`** (language standards, prohibited features, error handling) and the **Simulator Behavior Contract in `README.md`**. The rules there are tightly enforced.
 
 **Build:** `./make.py :build` from the repo root. Simulator libs are `src/_out/<release|debug>_<wh|bh>/libttsim.so`. Use `./make.py <path> [<path> ...]` to rebuild a specific list of targets, e.g., `./make.py src/_out/release_wh/libttsim.so`. Wormhole/Blackhole = `TT_ARCH_VERSION` 0/1. Anything under `_out/` is generated; never edit.
 
