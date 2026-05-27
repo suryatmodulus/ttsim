@@ -129,6 +129,7 @@ Design data structures with serialization in mind:
 - `.github/` - CI workflows
 - `data/` - hardware specifications (do not edit manually)
 - `docs/` - design docs
+- `scripts/` - build/utility scripts
 - `src/` - source code
 
 ## Documentation & Comments

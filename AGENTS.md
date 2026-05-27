@@ -4,9 +4,9 @@ This is a Tenstorrent hardware simulator and official ISA golden reference model
 
 **Build:** `./make.py :build` from the repo root. Simulator libs are `src/_out/<release|debug>_<wh|bh>/libttsim.so`. Use `./make.py <path> [<path> ...]` to rebuild a specific list of targets, e.g., `./make.py src/_out/release_wh/libttsim.so`. Wormhole/Blackhole = `TT_ARCH_VERSION` 0/1. Anything under `_out/` is generated; never edit.
 
-**Layout:** `src/` simulator (C++), `data/{wh,bh}/` ISA tables (do not edit manually), `docs/` design docs.
+**Layout:** `src/` simulator (C++), `data/{wh,bh}/` ISA tables (do not edit manually), `scripts/` tooling, `docs/` design docs.
 
-**Style:** ASCII-only, no trailing whitespace, no extra blank lines, no tabs. Indent 4 spaces. Match surrounding code for everything else.
+**Style:** `./scripts/check_style.py` (CI-enforced: ASCII-only, no trailing whitespace, no extra blank lines, no tabs). Indent 4 spaces. Match surrounding code for everything else.
 
 **Error handling:** Do not remove `UndefinedBehavior`/`NonContractualBehavior`/`UnpredictableValueUsed` checks without a corresponding `tt-isa-documentation` (external repo) spec change meeting the evidentiary conditions in the tt-isa-doc `Glossary.md`'s "UndefinedBehavior: Note on redefinition". Do not disable error checks or implement `UnsupportedFunctionality` (intentionally subsetted features) to chase "pass rate." A simulator that silently accepts UB/NCB/UV inputs without reporting an error and failing is incorrect by design and unacceptable for safety-critical markets.
 

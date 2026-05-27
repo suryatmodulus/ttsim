@@ -23,6 +23,10 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v6
 
+    - name: Run Style Checker
+      run: |
+        scripts/check_style.py
+
     - name: Build Simulator
       run: |
         ./make.py :build
