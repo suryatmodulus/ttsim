@@ -234,3 +234,29 @@ For security vulnerabilities, please follow our [Security Policy](SECURITY.md).
 ## License
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 Additional information is available in [LICENSE_understanding.txt](LICENSE_understanding.txt).
+
+## Coda: Philosophical Inspirations
+
+The principles `ttsim` operates under are not novel to this project. They draw on ideas
+articulated and lived in several other communities, each in a different domain:
+
+- **The Bell Labs Unix lineage** (V6/V7 Unix, Plan 9, Inferno) for orthogonality, simplicity, the
+  principle that a system should be small enough for one engineer to read in a sitting, and the
+  broader systems-research tradition of refusing complexity that isn't load-bearing. The 1970s V6
+  Unix instance produced *Lions' Commentary on UNIX 6th Edition* - the first widely-circulated
+  annotated source listing of a real operating system - and the recurring "wait, this is the
+  kernel? the whole thing?" reaction from readers accustomed to industrial-scale opacity.
+- **The reproducible-builds movement** (Debian, NixOS, Bazel, in-toto, SLSA) for the
+  determinism-as-a-value posture applied to build pipelines and supply-chain integrity.
+- **OpenBSD** for the "secure by default"/"strict by default" posture, the willingness to refuse
+  features that compromise discipline, and the treatment of documentation as engineering work.
+- **The Daniel J. Bernstein lineage of tools** (qmail, daemontools, djbdns, NaCl/libsodium
+  ancestry) for the strict-input/small-codebase/hard-fail discipline, and for early
+  articulation of timing-attack paranoia and constant-time implementation.
+- **TigerBeetle's "TigerStyle"** as an unusually clear contemporary articulation of disciplined
+  engineering principles, inherited in part from NASA's Power-of-Ten rules and applied to a
+  modern database.
+
+The novelty here is not the principles themselves but their application to chip simulator
+infrastructure - a domain that has not historically required this discipline at the same level.
+We think it should.
