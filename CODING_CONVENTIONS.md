@@ -7,6 +7,8 @@ This document defines coding style and technical conventions specific to this co
 - **Consistency over preference.** Follow the style of the surrounding code.
 - **No style debates.** Time is better spent on correctness and performance.
 - **Copy existing patterns.** If unsure, imitate the nearest example.
+- **Write for outside readers.** This codebase is read by safety auditors and by academic users
+  adopting `ttsim` as a reference implementation. Code only its author can follow is a liability.
 
 ## Language & Standards
 

@@ -134,6 +134,10 @@ precise about what is and isn't part of its contract - which is exactly what the
 `UndefinedBehavior`/`NonContractualBehavior`/`UnsupportedFunctionality` taxonomy provides, and
 exactly what `ttsim`'s strict enforcement protects.
 
+The same discipline also serves academic and educational use of `ttsim` as a reference platform for
+AI-accelerator microarchitecture, where legibility to an outside reader overlaps heavily with what
+safety auditors need.
+
 ### Numerical Accuracy
 `ttsim` is designed to provide **bit-exact** numerical results relative to silicon for all
 computations, floating point and otherwise. The goal is to match all hardware computations
