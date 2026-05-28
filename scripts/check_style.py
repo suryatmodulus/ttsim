@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: (c) 2025-2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# Repo-wide style checker for tracked source files (line length, whitespace, ASCII, etc.).
 import os
 
 # Only files that come from external teams/orgs should go in this list
