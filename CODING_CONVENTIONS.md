@@ -15,7 +15,7 @@ This document defines coding style and technical conventions specific to this co
 - Primary language: a constrained subset of **gnu++20** (with limited C/assembly where appropriate).
 - Scripts/tools: **Python 3.x**, plus **JSON** for data interchange/serialization.
 - Bash may be used for trivial scripts (a few lines). For anything with control flow or >10 lines, use Python.
-- Code must build and run on: Linux/x86_64, Linux/aarch64, Linux/riscv64, macOS/aarch64, and Windows/x86_64.
+- Code must build and run on: Linux/x86_64, Linux/aarch64, Linux/riscv64, and macOS/aarch64.
 - Must build cleanly with `-Wall -Werror`.
 
 ## Style Rules
