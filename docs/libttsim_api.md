@@ -131,6 +131,13 @@ process, with the explicit exception of semihosting (below).
 - **Exceptions.** The library is compiled without C++ exception support and never throws. No
   exception will ever propagate out of an entry point; the only failure mode is the fatal-error
   path described below.
+- **Dynamic loading.** The library never calls `dlopen` or otherwise loads code at runtime. It pulls
+  in no plugins, backends, or auxiliary libraries behind the host's back, so its dependency set and
+  audit surface are fixed and fully known at link time.
+- **Code generation.** The library does not JIT-compile, generate, or self-modify executable code,
+  and maps no executable memory at runtime. It is W^X-compliant and runs in environments that
+  disallow runtime code generation at the kernel or runtime level (e.g. hardened or locked-down
+  hosts).
 
 ### Semihosting (deliberate exception)
 
@@ -239,8 +246,8 @@ The following require the staged lead-time treatment above:
 - Changing the process model in a way a host must account for (e.g. the singleton or once-only
   `libttsim_init` semantics).
 - Changing the host-process guarantees in normal (non-semihosting) operation - e.g. beginning to
-  perform file or network I/O, installing signal handlers, or allocating memory after
-  `libttsim_init` returns.
+  perform file or network I/O, installing signal handlers, allocating memory after `libttsim_init`
+  returns, loading code via `dlopen`, or generating or self-modifying executable code (JIT).
 - Changing the documented meaning of an environment variable the library reads.
 - Adding a new mandatory runtime dependency, or dropping support for a currently supported CI
   platform.
