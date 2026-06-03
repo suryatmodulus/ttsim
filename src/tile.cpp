@@ -7,9 +7,16 @@
 #if TT_ARCH_VERSION == 0
 #define NONTENSIX_COL_MASK 0x21
 #define NONTENSIX_ROW_MASK 0x41
+#define ARC_CSM_SIZE (ARC_XBAR_CSM_LIMIT - ARC_XBAR_CSM_BASE + 1)
 #elif TT_ARCH_VERSION == 1
 #define NONTENSIX_COL_MASK 0x301
 #define NONTENSIX_ROW_MASK 0x03
+#endif
+
+#if TT_ARCH_VERSION == 0
+static uint8_t s_arc_csm[ARC_CSM_SIZE];
+static uint32_t s_reset_unit_scratch_6;
+static uint32_t s_reset_unit_scratch_7;
 #endif
 
 template<char tile_type>
@@ -1630,6 +1637,135 @@ static uint64_t translate_pci_dma_addr(uint64_t addr, uint32_t size) {
 #endif
 }
 
+#if TT_ARCH_VERSION == 0
+static uint32_t arc_reset_unit_rd32(uint32_t offset) {
+    switch (offset) {
+        case RESET_UNIT_SCRATCH_0:
+            return 0; // signals that ARC firmware is not running
+        case RESET_UNIT_NOC_NODEID_X_0:
+        case RESET_UNIT_NOC_NODEID_Y_0:
+            return 0; // signals that telemetry is unavailable
+        case RESET_UNIT_SCRATCH_6:
+            return s_reset_unit_scratch_6;
+        case RESET_UNIT_SCRATCH_7:
+            return s_reset_unit_scratch_7;
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "arc_reset_unit: offset=0x%x", offset);
+    }
+}
+
+static void arc_reset_unit_wr32(uint32_t offset, uint32_t value) {
+    switch (offset) {
+        case RESET_UNIT_SCRATCH_6:
+            s_reset_unit_scratch_6 = value;
+            break;
+        case RESET_UNIT_SCRATCH_7:
+            s_reset_unit_scratch_7 = value;
+            break;
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "arc_reset_unit: offset=0x%x", offset);
+    }
+}
+
+static uint32_t arc_niu_rd32(uint32_t noc_instance, uint32_t offset) {
+    switch (offset) {
+        case NOC_REGS_NOC_NODE_ID:
+            if (noc_instance == 0) {
+                return (10 << 6) | (10 << 12) | (12 << 19) | (1 << 28);
+            }
+            return ((9 | (11 << 6)) - (10 << 6)) | (10 << 12) | (12 << 19);
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "arc_niu: noc=%d offset=0x%x", noc_instance, offset);
+    }
+}
+
+static uint32_t arc_apb_rd32(uint32_t apb_offset) {
+    switch (apb_offset) {
+        case ARC_APB_RESET_UNIT_BASE ... ARC_APB_RESET_UNIT_LIMIT:
+            return arc_reset_unit_rd32(apb_offset - ARC_APB_RESET_UNIT_BASE);
+        case ARC_APB_NIU0_BASE ... ARC_APB_NIU0_LIMIT:
+            return arc_niu_rd32(0, apb_offset - ARC_APB_NIU0_BASE);
+        case ARC_APB_NIU1_BASE ... ARC_APB_NIU1_LIMIT:
+            return arc_niu_rd32(1, apb_offset - ARC_APB_NIU1_BASE);
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "arc_apb: offset=0x%x", apb_offset);
+    }
+}
+
+static void arc_apb_wr32(uint32_t apb_offset, uint32_t value) {
+    switch (apb_offset) {
+        case ARC_APB_RESET_UNIT_BASE ... ARC_APB_RESET_UNIT_LIMIT:
+            arc_reset_unit_wr32(apb_offset - ARC_APB_RESET_UNIT_BASE, value);
+            break;
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "arc_apb: offset=0x%x", apb_offset);
+    }
+}
+
+static void arc_tile_rd_bytes(uint64_t addr, void *p, uint32_t size) {
+    switch (addr) {
+        case ARC_NOC_XBAR_BASE ... ARC_NOC_XBAR_LIMIT: {
+            uint32_t xbar_addr = addr - ARC_NOC_XBAR_BASE;
+            switch (xbar_addr) {
+                case ARC_XBAR_CSM_BASE ... ARC_XBAR_CSM_LIMIT: {
+                    uint32_t csm_offset = xbar_addr - ARC_XBAR_CSM_BASE;
+                    TTSIM_VERIFY(uint64_t(csm_offset) + uint64_t(size) <= ARC_CSM_SIZE, UndefinedBehavior,
+                                 "arc_csm overrun: offset=0x%x size=%d", csm_offset, size);
+                    memcpy(p, &s_arc_csm[csm_offset], size);
+                    break;
+                }
+                case ARC_XBAR_APB_BASE ... ARC_XBAR_APB_LIMIT: {
+                    uint32_t apb_offset = xbar_addr - ARC_XBAR_APB_BASE;
+                    TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior,
+                                 "arc_apb: offset=0x%x size=%d", apb_offset, size);
+                    mem_wr<uint32_t>(p, arc_apb_rd32(apb_offset));
+                    break;
+                }
+                default:
+                    TTSIM_ERROR(UnimplementedFunctionality, "arc: addr=0x%llx size=%d", addr, size);
+            }
+            break;
+        }
+        case ARC_NOC_NIU0_BASE ... ARC_NOC_NIU0_LIMIT: {
+            TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "arc_niu: addr=0x%llx size=%d", addr, size);
+            mem_wr<uint32_t>(p, arc_niu_rd32(0, addr - ARC_NOC_NIU0_BASE));
+            break;
+        }
+        case ARC_NOC_NIU1_BASE ... ARC_NOC_NIU1_LIMIT: {
+            TTSIM_VERIFY((size == 4) && !(addr & 3), UndefinedBehavior, "arc_niu: addr=0x%llx size=%d", addr, size);
+            mem_wr<uint32_t>(p, arc_niu_rd32(1, addr - ARC_NOC_NIU1_BASE));
+            break;
+        }
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "arc: addr=0x%llx size=%d", addr, size);
+    }
+}
+
+static void arc_tile_wr_bytes(uint64_t addr, const void *p, uint32_t size) {
+    TTSIM_VERIFY((addr >= ARC_NOC_XBAR_BASE) && (addr + size <= ARC_NOC_XBAR_LIMIT + 1),
+                 UnimplementedFunctionality, "arc: addr=0x%llx size=%d", addr, size);
+    uint32_t xbar_addr = addr - ARC_NOC_XBAR_BASE;
+    switch (xbar_addr) {
+        case ARC_XBAR_CSM_BASE ... ARC_XBAR_CSM_LIMIT: {
+            uint32_t csm_offset = xbar_addr - ARC_XBAR_CSM_BASE;
+            TTSIM_VERIFY(uint64_t(csm_offset) + uint64_t(size) <= ARC_CSM_SIZE, UndefinedBehavior,
+                         "arc_csm overrun: offset=0x%x size=%d", csm_offset, size);
+            memcpy(&s_arc_csm[csm_offset], p, size);
+            break;
+        }
+        case ARC_XBAR_APB_BASE ... ARC_XBAR_APB_LIMIT: {
+            uint32_t apb_offset = xbar_addr - ARC_XBAR_APB_BASE;
+            TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior,
+                         "arc_apb: offset=0x%x size=%d", apb_offset, size);
+            arc_apb_wr32(apb_offset, mem_rd<uint32_t>(p));
+            break;
+        }
+        default:
+            TTSIM_ERROR(UnimplementedFunctionality, "arc: addr=0x%llx size=%d", addr, size);
+    }
+}
+#endif
+
 void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
     auto [tile_type, tile_id] = coord_to_tile(coord);
     if (tile_type == 'D') {
@@ -1668,6 +1804,11 @@ void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
     } else if (tile_type == 'P') {
         TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
         libttsim_pci_dma_mem_rd_bytes(translate_pci_dma_addr(addr, size), p, size);
+#if TT_ARCH_VERSION == 0
+    } else if (tile_type == 'A') {
+        TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
+        arc_tile_rd_bytes(addr, p, size);
+#endif
     } else {
         TTSIM_ERROR(UnimplementedFunctionality, "tile_type=%c", tile_type);
     }
@@ -1744,6 +1885,11 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
     } else if (tile_type == 'P') {
         TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
         libttsim_pci_dma_mem_wr_bytes(translate_pci_dma_addr(addr, size), p, size);
+#if TT_ARCH_VERSION == 0
+    } else if (tile_type == 'A') {
+        TTSIM_VERIFY(!tile_id, UnimplementedFunctionality, "tile=%c%d", tile_type, tile_id);
+        arc_tile_wr_bytes(addr, p, size);
+#endif
     } else {
         TTSIM_ERROR(UnimplementedFunctionality, "tile_type=%c", tile_type);
     }

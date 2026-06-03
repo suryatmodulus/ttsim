@@ -114,6 +114,46 @@
       "base": "0xFFBA0000",
       "limit": "0xFFBAFFFF",
       "name": "eth_mac_regs"
+    },
+    {
+      "base": "0x800000000",
+      "limit": "0x8FFFFFFFF",
+      "name": "arc_noc_xbar"
+    },
+    {
+      "base": "0xFFFB20000",
+      "limit": "0xFFFB2FFFF",
+      "name": "arc_noc_niu0"
+    },
+    {
+      "base": "0xFFFB30000",
+      "limit": "0xFFFB3FFFF",
+      "name": "arc_noc_niu1"
+    },
+    {
+      "base": "0x10000000",
+      "limit": "0x1007FFFF",
+      "name": "arc_xbar_csm"
+    },
+    {
+      "base": "0x80000000",
+      "limit": "0x800FFFFF",
+      "name": "arc_xbar_apb"
+    },
+    {
+      "base": "0x30000",
+      "limit": "0x3FFFF",
+      "name": "arc_apb_reset_unit"
+    },
+    {
+      "base": "0x50000",
+      "limit": "0x50FFF",
+      "name": "arc_apb_niu0"
+    },
+    {
+      "base": "0x58000",
+      "limit": "0x58FFF",
+      "name": "arc_apb_niu1"
     }
   ],
   "regs": [
@@ -650,6 +690,41 @@
           "rw": "wo",
           "reset_value": "0x00000007",
           "name": "erisc_mac_1"
+        }
+      ]
+    },
+    {
+      "name": "reset_unit",
+      "regs": [
+        {
+          "offset": "0x60",
+          "rw": null,
+          "reset_value": null,
+          "name": "scratch_0"
+        },
+        {
+          "offset": "0x78",
+          "rw": null,
+          "reset_value": null,
+          "name": "scratch_6"
+        },
+        {
+          "offset": "0x7C",
+          "rw": null,
+          "reset_value": null,
+          "name": "scratch_7"
+        },
+        {
+          "offset": "0x1D0",
+          "rw": null,
+          "reset_value": null,
+          "name": "noc_nodeid_x_0"
+        },
+        {
+          "offset": "0x1D4",
+          "rw": null,
+          "reset_value": null,
+          "name": "noc_nodeid_y_0"
         }
       ]
     }

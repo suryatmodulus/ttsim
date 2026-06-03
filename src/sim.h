@@ -280,6 +280,9 @@ struct TensixConfigState {
 #elif TT_ARCH_VERSION == 1
     CFG12_REG_UNION()
     CFG13_REG_UNION()
+    CFG14_REG_UNION()
+    CFG15_REG_UNION()
+    CFG17_REG_UNION()
     CFG18_REG_UNION()
     CFG20_REG_UNION()
     CFG21_REG_UNION()

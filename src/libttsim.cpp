@@ -30,21 +30,16 @@
 
 #define ARC_CSM_BASE 0x1FE80000
 #define ARC_CSM_LIMIT 0x1FEFFFFF
-#define ARC_CSM_SIZE (ARC_CSM_LIMIT - ARC_CSM_BASE + 1)
 #define ARC_APB_BASE 0x1FF00000
 #define ARC_APB_LIMIT 0x1FFFFFFF
+#define ARC_COORD (0 | (10 << 6))
+#define ARC_NOC_CSM_BASE 0x810000000ull
+#define ARC_NOC_APB_BASE 0x880000000ull
 #define IATU_BASE 0x1200ull
 #define IATU_LIMIT 0x31FFull
 #define IATU_REGION_ENABLE 0x80000000u
 #define IATU_SUPPORTED_INBOUND_CTRL_2 0xC8000400u
 #define IATU_SUPPORTED_INBOUND_TARGET 0x1E000000ull
-
-// Reset-unit register offsets. See tt-kmd wormhole.c for authoritative names/semantics.
-#define RESET_UNIT_SCRATCH_0       0x30060 // POST_CODE_REG
-#define RESET_UNIT_SCRATCH_6       0x30078 // PCIE_ARMISC_INFO_REG
-#define RESET_UNIT_SCRATCH_7       0x3007C // PCIE_AWMISC_INFO_REG
-#define RESET_UNIT_NOC_NODEID_X_0  0x301D0
-#define RESET_UNIT_NOC_NODEID_Y_0  0x301D4
 #endif
 
 static bool s_ttsim_running = false;
@@ -53,9 +48,6 @@ static void (*s_pfn_libttsim_pci_dma_mem_rd_bytes)(uint64_t paddr, void *p, uint
 static void (*s_pfn_libttsim_pci_dma_mem_wr_bytes)(uint64_t paddr, const void *p, uint32_t size);
 #if TT_ARCH_VERSION == 0
 static uint64_t s_tlb_cfg[186];
-static uint8_t s_arc_csm[ARC_CSM_SIZE];
-static uint32_t s_reset_unit_scratch_6;
-static uint32_t s_reset_unit_scratch_7;
 
 struct IatuRegion {
     uint32_t ctrl_1;
@@ -197,7 +189,7 @@ static std::pair<uint32_t, uint64_t> tlb_translate(uint32_t offset, uint32_t siz
     uint64_t addr_bits = tlb_cfg & ((1ull << n_addr_bits) - 1);
     uint64_t addr = (addr_bits << window_bits) | offset;
     tlb_cfg >>= n_addr_bits; // after this shift, bit positions correspond directly to the spec's "first bit" column relative to N
-    TTSIM_VERIFY(!(tlb_cfg & ~uint64_t(0xC000FFF)), UnimplementedFunctionality, "tlb_cfg=0x%llx", tlb_cfg);
+    TTSIM_VERIFY(!(tlb_cfg & ~uint64_t(0x2C000FFF)), UnimplementedFunctionality, "tlb_cfg=0x%llx", tlb_cfg);
     uint32_t coord = tlb_cfg & 0xFFF;
     uint32_t ordering = bits<27,26>(tlb_cfg);
     TTSIM_VERIFY(ordering != 3, UndefinedBehavior, "tlb_cfg ordering=%d", ordering);
@@ -241,41 +233,6 @@ static std::pair<uint32_t, uint64_t> tlb_translate_bar4(uint64_t offset, uint32_
 }
 #endif
 
-#if TT_ARCH_VERSION == 0
-static uint32_t arc_apb_rd32(uint32_t apb_offset) {
-    switch (apb_offset) {
-        case RESET_UNIT_SCRATCH_0:
-            return 0; // signals that ARC firmware is not running
-        case RESET_UNIT_NOC_NODEID_X_0:
-        case RESET_UNIT_NOC_NODEID_Y_0:
-            return 0; // signals that telemetry is unavailable
-        case RESET_UNIT_SCRATCH_6:
-            return s_reset_unit_scratch_6;
-        case RESET_UNIT_SCRATCH_7:
-            return s_reset_unit_scratch_7;
-        case 0x50000 + NOC_REGS_NOC_NODE_ID:
-            return (10 << 6) | (10 << 12) | (12 << 19) | (1 << 28);
-        case 0x58000 + NOC_REGS_NOC_NODE_ID:
-            return ((9 | (11 << 6)) - (10 << 6)) | (10 << 12) | (12 << 19);
-        default:
-            TTSIM_ERROR(UnimplementedFunctionality, "arc_apb: offset=0x%x", apb_offset);
-    }
-}
-
-static void arc_apb_wr32(uint32_t apb_offset, uint32_t value) {
-    switch (apb_offset) {
-        case RESET_UNIT_SCRATCH_6:
-            s_reset_unit_scratch_6 = value;
-            break;
-        case RESET_UNIT_SCRATCH_7:
-            s_reset_unit_scratch_7 = value;
-            break;
-        default:
-            TTSIM_ERROR(UnimplementedFunctionality, "arc_apb: offset=0x%x", apb_offset);
-    }
-}
-#endif
-
 extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size) {
     TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
     TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
@@ -297,15 +254,12 @@ extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, ui
 #if TT_ARCH_VERSION == 0
                 case ARC_CSM_BASE ... ARC_CSM_LIMIT: {
                     uint32_t csm_offset = offset - ARC_CSM_BASE;
-                    TTSIM_VERIFY(csm_offset + size <= ARC_CSM_SIZE, UndefinedBehavior, "arc_csm overrun: offset=0x%x size=%d", offset, size);
-                    memcpy(p, &s_arc_csm[csm_offset], size);
+                    tile_rd_bytes(ARC_COORD, ARC_NOC_CSM_BASE + csm_offset, p, size);
                     break;
                 }
                 case ARC_APB_BASE ... ARC_APB_LIMIT: {
                     uint32_t apb_offset = offset - ARC_APB_BASE;
-                    TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior,
-                                 "arc_apb: offset=0x%x size=%d", apb_offset, size);
-                    mem_wr<uint32_t>(p, arc_apb_rd32(apb_offset));
+                    tile_rd_bytes(ARC_COORD, ARC_NOC_APB_BASE + apb_offset, p, size);
                     break;
                 }
 #endif
@@ -406,15 +360,12 @@ extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void 
                 }
                 case ARC_CSM_BASE ... ARC_CSM_LIMIT: {
                     uint32_t csm_offset = offset - ARC_CSM_BASE;
-                    TTSIM_VERIFY(csm_offset + size <= ARC_CSM_SIZE, UndefinedBehavior, "arc_csm overrun: offset=0x%x size=%d", offset, size);
-                    memcpy(&s_arc_csm[csm_offset], p, size);
+                    tile_wr_bytes(ARC_COORD, ARC_NOC_CSM_BASE + csm_offset, p, size);
                     break;
                 }
                 case ARC_APB_BASE ... ARC_APB_LIMIT: {
                     uint32_t apb_offset = offset - ARC_APB_BASE;
-                    TTSIM_VERIFY((size == 4) && !(apb_offset & 3), UndefinedBehavior,
-                                 "arc_apb: offset=0x%x size=%d", apb_offset, size);
-                    arc_apb_wr32(apb_offset, mem_rd<uint32_t>(p));
+                    tile_wr_bytes(ARC_COORD, ARC_NOC_APB_BASE + apb_offset, p, size);
                     break;
                 }
 #elif TT_ARCH_VERSION == 1

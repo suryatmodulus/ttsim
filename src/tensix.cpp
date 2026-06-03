@@ -259,6 +259,9 @@ uint32_t tensix_cfg_rd32(TensixState *p_tensix, uint32_t bank, uint32_t offset) 
 #elif TT_ARCH_VERSION == 1
         CFG_REG_BANKED_RD(12)
         CFG_REG_BANKED_RD(13)
+        CFG_REG_BANKED_RD(14)
+        CFG_REG_BANKED_RD(15)
+        CFG_REG_BANKED_RD(17)
         CFG_REG_BANKED_RD(18)
         CFG_REG_BANKED_RD(24)
         CFG_REG_BANKED_RD(28)
@@ -382,7 +385,9 @@ void tensix_cfg_wr32(TensixState *p_tensix, uint32_t bank, uint32_t offset, uint
 #elif TT_ARCH_VERSION == 1
         CFG_REG_BANKED_WR(12)
         CFG_REG_BANKED_WR(13)
-        case 15: break;
+        CFG_REG_BANKED_WR(14)
+        CFG_REG_BANKED_WR(15)
+        CFG_REG_BANKED_WR(17)
         CFG_REG_BANKED_WR(18)
         CFG_REG_BANKED_WR(20)
         CFG_REG_BANKED_WR(21)
@@ -2076,11 +2081,17 @@ TENSIX_EXECUTE_PACR() {
         pack_row &= DST_ROWS-1;
         TTSIM_VERIFY(pack_row + ((count + ROW_SIZE-1) / ROW_SIZE) <= DST_ROWS, UnimplementedFunctionality, "pack_row=%d count=%d", pack_row, count);
         if (!p_tensix->packer_dst_addr_valid) {
-            // XXX no PCK0_ADDR_BASE_REG_1_Base
             uint32_t addr = packer_addrs[packer];
-            TTSIM_VERIFY(!p_addr_ctrl->ch1_y, UnimplementedFunctionality, "ch1_y=%d", p_addr_ctrl->ch1_y);
             TTSIM_VERIFY(!p_addr_ctrl->ch1_z, UnimplementedFunctionality, "ch1_z=%d", p_addr_ctrl->ch1_z);
             TTSIM_VERIFY(!p_addr_ctrl->ch1_w, UnimplementedFunctionality, "ch1_w=%d", p_addr_ctrl->ch1_w);
+#if TT_ARCH_VERSION == 1
+            TTSIM_VERIFY(!p_config->PCK0_ADDR_BASE_REG_1_Base, UnimplementedFunctionality, "PCK0_ADDR_BASE_REG_1_Base=0x%x", p_config->PCK0_ADDR_BASE_REG_1_Base);
+            uint32_t yzw_addr = p_addr_ctrl->ch1_y * p_config->PCK0_ADDR_CTRL_XY_REG_1_Ystride;
+            addr += yzw_addr >> 4;
+#else
+            // XXX no PCK0_ADDR_BASE_REG_1_Base
+            TTSIM_VERIFY(!p_addr_ctrl->ch1_y, UnimplementedFunctionality, "ch1_y=%d", p_addr_ctrl->ch1_y);
+#endif
             p_tensix->packer_dst_exp_addr[packer] = addr << 4;
             if (dst_element_size_bits <= 8) {
                 uint32_t exp_section_size;
