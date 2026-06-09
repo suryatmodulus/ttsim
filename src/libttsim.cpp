@@ -46,21 +46,8 @@ static bool s_ttsim_running = false;
 static bool s_ttsim_semihosting = false;
 static void (*s_pfn_libttsim_pci_dma_mem_rd_bytes)(uint64_t paddr, void *p, uint32_t size);
 static void (*s_pfn_libttsim_pci_dma_mem_wr_bytes)(uint64_t paddr, const void *p, uint32_t size);
+
 #if TT_ARCH_VERSION == 0
-static uint64_t s_tlb_cfg[186];
-
-struct IatuRegion {
-    uint32_t ctrl_1;
-    uint32_t ctrl_2;
-    uint32_t lower_base;
-    uint32_t upper_base;
-    uint32_t limit;
-    uint32_t lower_target;
-    uint32_t upper_target;
-};
-static IatuRegion s_iatu_outbound[16];
-static IatuRegion s_iatu_inbound[16];
-
 static void verify_iatu_region_write(uint32_t offset, uint32_t value) {
     uint32_t slot = offset / 0x100;
     TTSIM_VERIFY(slot < 32, UnimplementedFunctionality, "bar2: iATU offset=0x%x", offset);
@@ -94,7 +81,7 @@ static uint32_t *iatu_reg_field(uint32_t offset) {
     uint32_t slot = offset / 0x100;
     TTSIM_VERIFY(slot < 32, UnimplementedFunctionality, "bar2: iATU offset=0x%x", offset);
     uint32_t reg = offset % 0x100;
-    IatuRegion *r = (slot & 1) ? &s_iatu_inbound[slot >> 1] : &s_iatu_outbound[slot >> 1];
+    IatuRegion *r = (slot & 1) ? &g_p_tile.iatu_inbound[slot >> 1] : &g_p_tile.iatu_outbound[slot >> 1];
     switch (reg) {
         case 0x00: return &r->ctrl_1;
         case 0x04: return &r->ctrl_2;
@@ -106,8 +93,6 @@ static uint32_t *iatu_reg_field(uint32_t offset) {
         default: TTSIM_ERROR(UnimplementedFunctionality, "bar2: iATU reg offset=0x%x", reg);
     }
 }
-#elif TT_ARCH_VERSION == 1
-static uint32_t s_tlb_cfg[210*3];
 #endif
 
 extern "C" API_EXPORT void libttsim_init() {
@@ -183,9 +168,9 @@ static std::pair<uint32_t, uint64_t> tlb_translate(uint32_t offset, uint32_t siz
     uint32_t window_mask = (1 << window_bits) - 1;
     offset &= window_mask;
     uint32_t n_addr_bits = 36 - window_bits; // number of local_offset bits in TLB config
-    TTSIM_VERIFY(tlb_index < std::size(s_tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
+    TTSIM_VERIFY(tlb_index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
     TTSIM_VERIFY(offset + size - 1 <= window_mask, UnsupportedFunctionality, "TLB region overrun: offset=0x%x size=%d", offset, size);
-    uint64_t tlb_cfg = s_tlb_cfg[tlb_index];
+    uint64_t tlb_cfg = g_p_tile.tlb_cfg[tlb_index];
     uint64_t addr_bits = tlb_cfg & ((1ull << n_addr_bits) - 1);
     uint64_t addr = (addr_bits << window_bits) | offset;
     tlb_cfg >>= n_addr_bits; // after this shift, bit positions correspond directly to the spec's "first bit" column relative to N
@@ -196,11 +181,11 @@ static std::pair<uint32_t, uint64_t> tlb_translate(uint32_t offset, uint32_t siz
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_index = offset / 0x200000;
     offset &= 0x1FFFFF;
-    TTSIM_VERIFY(3*tlb_index < std::size(s_tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
+    TTSIM_VERIFY(3*tlb_index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
     TTSIM_VERIFY(offset + size - 1 <= 0x1FFFFF, UnsupportedFunctionality, "TLB region overrun: offset=0x%x size=%d", offset, size);
-    uint32_t tlb_cfg0 = s_tlb_cfg[3*tlb_index + 0];
-    uint32_t tlb_cfg1 = s_tlb_cfg[3*tlb_index + 1];
-    uint32_t tlb_cfg2 = s_tlb_cfg[3*tlb_index + 2];
+    uint32_t tlb_cfg0 = g_p_tile.tlb_cfg[3*tlb_index + 0];
+    uint32_t tlb_cfg1 = g_p_tile.tlb_cfg[3*tlb_index + 1];
+    uint32_t tlb_cfg2 = g_p_tile.tlb_cfg[3*tlb_index + 2];
     TTSIM_VERIFY(tlb_cfg1 <= 0x7FFFFF, UnimplementedFunctionality, "tlb_cfg1=0x%x", tlb_cfg1);
     TTSIM_VERIFY(!(tlb_cfg2 & ~0xC0u), UnimplementedFunctionality, "tlb_cfg2=0x%x", tlb_cfg2);
     uint32_t ordering = bits<7,6>(tlb_cfg2);
@@ -217,11 +202,11 @@ static std::pair<uint32_t, uint64_t> tlb_translate(uint32_t offset, uint32_t siz
 static std::pair<uint32_t, uint64_t> tlb_translate_bar4(uint64_t offset, uint32_t size) {
     uint32_t tlb_index = 202 + uint32_t(offset >> 32);
     uint32_t window_offset = uint32_t(offset);
-    TTSIM_VERIFY(3*tlb_index < std::size(s_tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
+    TTSIM_VERIFY(3*tlb_index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "tlb_index=%d", tlb_index);
     TTSIM_VERIFY(uint64_t(window_offset) + size <= 0x100000000ull, UnsupportedFunctionality, "TLB region overrun: offset=0x%x size=%d", window_offset, size);
-    uint32_t tlb_cfg0 = s_tlb_cfg[3*tlb_index + 0];
-    uint32_t tlb_cfg1 = s_tlb_cfg[3*tlb_index + 1];
-    uint32_t tlb_cfg2 = s_tlb_cfg[3*tlb_index + 2];
+    uint32_t tlb_cfg0 = g_p_tile.tlb_cfg[3*tlb_index + 0];
+    uint32_t tlb_cfg1 = g_p_tile.tlb_cfg[3*tlb_index + 1];
+    uint32_t tlb_cfg2 = g_p_tile.tlb_cfg[3*tlb_index + 2];
     TTSIM_VERIFY(!(tlb_cfg1 & ~0x18000FFFu), UnimplementedFunctionality, "tlb_cfg1=0x%x", tlb_cfg1);
     uint32_t ordering = bits<28,27>(tlb_cfg1);
     TTSIM_VERIFY(ordering != 3, UnimplementedFunctionality, "tlb_cfg ordering=%d", ordering);
@@ -248,7 +233,13 @@ extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, ui
 #endif
                 {
                     auto [coord, addr] = tlb_translate(offset, size);
+#if NUM_CHIPS > 1
+                    if (!wh_x2_legacy_remote_queue_host_rd(coord, addr, p, size)) {
+                        tile_rd_bytes(coord, addr, p, size);
+                    }
+#else
                     tile_rd_bytes(coord, addr, p, size);
+#endif
                     break;
                 }
 #if TT_ARCH_VERSION == 0
@@ -307,23 +298,23 @@ extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, ui
 #if TT_ARCH_VERSION == 0
 static void tlb_cfg_wr64(uint32_t tlb_offset, uint64_t data) {
     uint32_t index = tlb_offset / 8;
-    TTSIM_VERIFY(index < std::size(s_tlb_cfg), AssertionFailure, "index=%d", index);
-    s_tlb_cfg[index] = data;
+    TTSIM_VERIFY(index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "index=%d", index);
+    g_p_tile.tlb_cfg[index] = data;
 }
 
 static void tlb_cfg_wr32(uint32_t tlb_offset, uint32_t data) {
     uint32_t index = tlb_offset / 8;
-    TTSIM_VERIFY(index < std::size(s_tlb_cfg), AssertionFailure, "index=%d", index);
+    TTSIM_VERIFY(index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "index=%d", index);
     if (tlb_offset & 4) {
-        s_tlb_cfg[index] = (s_tlb_cfg[index] & 0xFFFFFFFFull) | (uint64_t(data) << 32);
+        g_p_tile.tlb_cfg[index] = (g_p_tile.tlb_cfg[index] & 0xFFFFFFFFull) | (uint64_t(data) << 32);
     } else {
-        s_tlb_cfg[index] = (s_tlb_cfg[index] & 0xFFFFFFFF00000000ull) | data;
+        g_p_tile.tlb_cfg[index] = (g_p_tile.tlb_cfg[index] & 0xFFFFFFFF00000000ull) | data;
     }
 }
 #elif TT_ARCH_VERSION == 1
 static void tlb_cfg_wr32(uint32_t index, uint32_t data) {
-    TTSIM_VERIFY(index < std::size(s_tlb_cfg), AssertionFailure, "index=%d", index);
-    s_tlb_cfg[index] = data;
+    TTSIM_VERIFY(index < std::size(g_p_tile.tlb_cfg), AssertionFailure, "index=%d", index);
+    g_p_tile.tlb_cfg[index] = data;
 }
 #endif
 
@@ -342,7 +333,13 @@ extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void 
 #endif
                 {
                     auto [coord, addr] = tlb_translate(offset, size);
+#if NUM_CHIPS > 1
+                    if (!wh_x2_legacy_remote_queue_host_wr(coord, addr, p, size)) {
+                        tile_wr_bytes(coord, addr, p, size);
+                    }
+#else
                     tile_wr_bytes(coord, addr, p, size);
+#endif
                     break;
                 }
 #if TT_ARCH_VERSION == 0
@@ -440,49 +437,66 @@ extern "C" API_EXPORT void libttsim_tile_wr_bytes(uint32_t x, uint32_t y, uint64
     TTSIM_ERROR_NOFMT(UnsupportedFunctionality);
 }
 
-extern "C" API_EXPORT void libttsim_clock(uint32_t n_clocks) {
-    TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
-    for (uint32_t i = 0; i < n_clocks; i++) {
-        for (uint32_t tile_id = 0; tile_id < std::size(g_t_tiles); tile_id++) {
-            TensixTile *p_tile = &g_t_tiles[tile_id];
-            // Hack: for simulator perf, we clock a tile repeatedly as long as it successfully executes at least one Tensix instruction
-            for (;;) {
-                for (uint32_t rv32_mask = p_tile->rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask-1) {
-                    uint32_t rv32_index = __builtin_ctz(rv32_mask);
-                    rv32_step(&p_tile->rv32[rv32_index]);
-                }
-                [[maybe_unused]] bool any_tensix = false;
-                for (uint32_t tensix_id = 0; tensix_id < std::size(p_tile->tensix); tensix_id++) {
-                    TensixState *p_tensix = &p_tile->tensix[tensix_id];
-                    for (uint32_t pipe_mask = p_tensix->inst_pipes_active; pipe_mask; pipe_mask &= pipe_mask-1) {
-                        uint32_t pipe = __builtin_ctz(pipe_mask);
-                        uint32_t inst_rd_ptr = p_tensix->inst_rd_ptr[pipe];
-                        if (inst_rd_ptr != p_tensix->inst_wr_ptr[pipe]) {
-                            uint32_t inst = p_tensix->inst[pipe][inst_rd_ptr];
-                            if (tensix_decode_and_execute(p_tensix, pipe, inst)) {
-                                any_tensix = true;
-                                inst_rd_ptr = (inst_rd_ptr + 1) % TENSIX_INST_FIFO_SIZE;
-                                p_tensix->inst_rd_ptr[pipe] = inst_rd_ptr;
-                                if (inst_rd_ptr == p_tensix->inst_wr_ptr[pipe]) {
-                                    p_tensix->inst_pipes_active &= ~(1 << pipe);
-                                }
+static void clock_current_chip() {
+    for (uint32_t tile_id = 0; tile_id < std::size(g_t_tiles); tile_id++) {
+        TensixTile *p_tile = &g_t_tiles[tile_id];
+        // Hack: for simulator perf, we clock a tile repeatedly as long as it successfully executes at least one Tensix instruction
+        for (;;) {
+            for (uint32_t rv32_mask = p_tile->rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask-1) {
+                uint32_t rv32_index = __builtin_ctz(rv32_mask);
+                rv32_step(&p_tile->rv32[rv32_index]);
+            }
+            [[maybe_unused]] bool any_tensix = false;
+            for (uint32_t tensix_id = 0; tensix_id < std::size(p_tile->tensix); tensix_id++) {
+                TensixState *p_tensix = &p_tile->tensix[tensix_id];
+                for (uint32_t pipe_mask = p_tensix->inst_pipes_active; pipe_mask; pipe_mask &= pipe_mask-1) {
+                    uint32_t pipe = __builtin_ctz(pipe_mask);
+                    uint32_t inst_rd_ptr = p_tensix->inst_rd_ptr[pipe];
+                    if (inst_rd_ptr != p_tensix->inst_wr_ptr[pipe]) {
+                        uint32_t inst = p_tensix->inst[pipe][inst_rd_ptr];
+                        if (tensix_decode_and_execute(p_tensix, pipe, inst)) {
+                            any_tensix = true;
+                            inst_rd_ptr = (inst_rd_ptr + 1) % TENSIX_INST_FIFO_SIZE;
+                            p_tensix->inst_rd_ptr[pipe] = inst_rd_ptr;
+                            if (inst_rd_ptr == p_tensix->inst_wr_ptr[pipe]) {
+                                p_tensix->inst_pipes_active &= ~(1 << pipe);
                             }
                         }
                     }
                 }
-                if (!any_tensix) {
-                    break; // no Tensix instructions executed, bail out
-                }
+            }
+            if (!any_tensix) {
+                break; // no Tensix instructions executed, bail out
             }
         }
-        for (uint64_t rv32_mask = g_rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask-1) {
-            uint32_t core_index = __builtin_ctzll(rv32_mask);
-            uint32_t tile_id = core_index / RV32_CORES_PER_E_TILE;
-            uint32_t rv32_index = core_index % RV32_CORES_PER_E_TILE;
-            rv32_step(&g_e_tiles[tile_id].rv32[rv32_index]);
-        }
-        g_clock++;
     }
+    for (uint64_t rv32_mask = g_rv32_cores_active; rv32_mask; rv32_mask &= rv32_mask-1) {
+        uint32_t core_index = __builtin_ctzll(rv32_mask);
+        uint32_t tile_id = core_index / RV32_CORES_PER_E_TILE;
+        uint32_t rv32_index = core_index % RV32_CORES_PER_E_TILE;
+        rv32_step(&g_e_tiles[tile_id].rv32[rv32_index]);
+    }
+}
+
+extern "C" API_EXPORT void libttsim_clock(uint32_t n_clocks) {
+    TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
+#if NUM_CHIPS > 1
+    uint32_t saved_chip_id = g_current_chip_id;
+#endif
+    for (uint32_t i = 0; i < n_clocks; i++) {
+#if NUM_CHIPS > 1
+        for (uint32_t chip_id = 0; chip_id < NUM_CHIPS; chip_id++) {
+            ttsim_select_chip(chip_id);
+            clock_current_chip();
+        }
+#else
+        clock_current_chip();
+#endif
+        g_clock++; // single global timebase, advanced once per clock across all chips
+    }
+#if NUM_CHIPS > 1
+    ttsim_select_chip(saved_chip_id);
+#endif
 }
 
 // Simplified read/write APIs for semihosting -- not fully general support for the address map

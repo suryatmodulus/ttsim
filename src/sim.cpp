@@ -8,12 +8,9 @@
 #include <sys/mman.h>
 #include "sim.h"
 
-TensixTile g_t_tiles[NUM_T_TILES];
-EthTile g_e_tiles[NUM_E_TILES];
-ArcTile g_a_tile;
-DramChannel g_dram[NUM_DRAM_CHANNELS];
+uint32_t g_current_chip_id;
 uint64_t g_clock;
-uint64_t g_rv32_cores_active;
+ChipState g_chips[NUM_CHIPS];
 
 void ttsim_printf(const char *fmt, ...) {
     va_list args;
@@ -50,22 +47,31 @@ void ttsim_error(TTSimErrorCategory category, const char *func, const char *fmt,
 }
 
 void ttsim_init() {
-    for (uint32_t tile_id = 0; tile_id < std::size(g_t_tiles); tile_id++) {
-        t_tile_init(tile_id);
-    }
-    for (uint32_t tile_id = 0; tile_id < std::size(g_e_tiles); tile_id++) {
-        e_tile_init(tile_id);
-    }
-    a_tile_init();
-    for (uint32_t i = 0; i < std::size(g_dram); i++) {
-        // Note that MAP_PRIVATE is required if we ever fork(), or else child processes will share DRAM with parent
-        g_dram[i].p_mem = (uint8_t *)mmap(nullptr, DRAM_CHANNEL_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        TTSIM_VERIFY(g_dram[i].p_mem != MAP_FAILED, SystemError, "DRAM mmap() failed");
+    for (uint32_t chip_id = 0; chip_id < NUM_CHIPS; chip_id++) {
+        ttsim_select_chip(chip_id);
+        for (uint32_t tile_id = 0; tile_id < std::size(g_t_tiles); tile_id++) {
+            t_tile_init(tile_id);
+        }
+        for (uint32_t tile_id = 0; tile_id < std::size(g_e_tiles); tile_id++) {
+            e_tile_init(tile_id);
+        }
+        a_tile_init();
+        for (uint32_t i = 0; i < std::size(g_dram); i++) {
+            // Note that MAP_PRIVATE is required if we ever fork(), or else child processes will share DRAM with parent
+            g_dram[i].p_mem = (uint8_t *)mmap(nullptr, DRAM_CHANNEL_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            TTSIM_VERIFY(g_dram[i].p_mem != MAP_FAILED, SystemError, "DRAM mmap() failed");
 #if defined(MADV_HUGEPAGE)
-        madvise(g_dram[i].p_mem, DRAM_CHANNEL_SIZE, MADV_HUGEPAGE);
+            madvise(g_dram[i].p_mem, DRAM_CHANNEL_SIZE, MADV_HUGEPAGE);
 #endif
-        // XXX It might be interesting to use MADV_DONTNEED or MADV_FREE in the future to release DRAM pages if we see them cleared with all zero
+            // XXX It might be interesting to use MADV_DONTNEED or MADV_FREE in the future to release DRAM pages if we see them cleared with all zero
+        }
     }
+    ttsim_select_chip(0);
+}
+
+void ttsim_select_chip(uint32_t chip_id) {
+    TTSIM_VERIFY(chip_id < NUM_CHIPS, ConfigurationError, "chip_id=%d", chip_id);
+    g_current_chip_id = chip_id;
 }
 
 void ttsim_exit() {

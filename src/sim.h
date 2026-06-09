@@ -466,6 +466,7 @@ struct TensixTile {
     uint32_t overlay_stream_remote_dest_buf_space_available[TENSIX_NUM_NOC_OVERLAY_STREAMS];
     uint32_t dbg_array_rd_en;
     uint32_t dbg_array_rd_data;
+    uint32_t tensix_creg_rddata;
     uint32_t soft_reset_0;
     uint32_t trisc0_reset_pc;
     uint32_t trisc1_reset_pc;
@@ -556,16 +557,67 @@ struct ArcTile {
 #endif
 };
 
+#if TT_ARCH_VERSION == 0
+struct IatuRegion {
+    uint32_t ctrl_1;
+    uint32_t ctrl_2;
+    uint32_t lower_base;
+    uint32_t upper_base;
+    uint32_t limit;
+    uint32_t lower_target;
+    uint32_t upper_target;
+};
+#endif
+
+struct PcieTile {
+#if TT_ARCH_VERSION == 0
+    uint64_t tlb_cfg[186];
+    IatuRegion iatu_outbound[16];
+    IatuRegion iatu_inbound[16];
+#elif TT_ARCH_VERSION == 1
+    uint32_t tlb_cfg[210*3];
+#endif
+};
+
 struct DramChannel {
     uint8_t *p_mem;
 };
 
-extern TensixTile g_t_tiles[NUM_T_TILES];
-extern EthTile g_e_tiles[NUM_E_TILES];
-extern ArcTile g_a_tile;
-extern DramChannel g_dram[NUM_DRAM_CHANNELS];
+#if !defined(NUM_CHIPS)
+#define NUM_CHIPS 1
+#endif
+
+struct ChipState {
+    TensixTile t_tiles[NUM_T_TILES];
+    EthTile e_tiles[NUM_E_TILES];
+    ArcTile a_tile;
+    PcieTile p_tile;
+    DramChannel dram[NUM_DRAM_CHANNELS];
+    uint64_t rv32_cores_active;
+};
+
+extern uint32_t g_current_chip_id;
 extern uint64_t g_clock;
-extern uint64_t g_rv32_cores_active;
+extern ChipState g_chips[NUM_CHIPS];
+
+// XXX transitional
+// Single-chip builds index a constant 0 so the hot paths cannot regress; only
+// multichip builds pay for the g_current_chip_id indirection.
+#if NUM_CHIPS > 1
+#define g_t_tiles g_chips[g_current_chip_id].t_tiles
+#define g_e_tiles g_chips[g_current_chip_id].e_tiles
+#define g_a_tile g_chips[g_current_chip_id].a_tile
+#define g_p_tile g_chips[g_current_chip_id].p_tile
+#define g_dram g_chips[g_current_chip_id].dram
+#define g_rv32_cores_active g_chips[g_current_chip_id].rv32_cores_active
+#else
+#define g_t_tiles g_chips[0].t_tiles
+#define g_e_tiles g_chips[0].e_tiles
+#define g_a_tile g_chips[0].a_tile
+#define g_p_tile g_chips[0].p_tile
+#define g_dram g_chips[0].dram
+#define g_rv32_cores_active g_chips[0].rv32_cores_active
+#endif
 
 void libttsim_pci_dma_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size);
 void libttsim_pci_dma_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size);
@@ -575,6 +627,7 @@ void ttsim_printf(const char *fmt, ...);
 [[noreturn, gnu::cold]] void ttsim_error(TTSimErrorCategory category, const char *func, const char *fmt, ...);
 void ttsim_init();
 void ttsim_exit();
+void ttsim_select_chip(uint32_t chip_id);
 bool ttsim_rv32_get_core_active(char tile_type, uint32_t tile_id, uint32_t rv32_id);
 void ttsim_rv32_set_core_active(char tile_type, uint32_t tile_id, uint32_t rv32_id, bool active);
 void ttsim_heartbeat();
@@ -604,6 +657,8 @@ std::pair<bool, uint64_t> tile_mmio_rd64(char tile_type, uint32_t tile_id, uint3
 [[nodiscard]] bool tile_mmio_wr64(char tile_type, uint32_t tile_id, uint32_t riscv_id, uint64_t addr, uint64_t data);
 void tile_rd_bytes(uint32_t coord, uint64_t addr, void *p, uint32_t size);
 void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size);
+bool wh_x2_legacy_remote_queue_host_rd(uint32_t coord, uint64_t addr, void *p, uint32_t size);
+bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void *p, uint32_t size);
 
 template<class T> inline T tile_rd(uint32_t coord, uint64_t addr) {
     T data;

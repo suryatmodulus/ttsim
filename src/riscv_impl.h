@@ -8,6 +8,9 @@
 
 #include "sim.h"
 #include "riscv_defines.h"
+#if (TT_ARCH_VERSION >= 1) && (XLEN == 32)
+#include "riscv_float.h"
+#endif
 #include <algorithm>
 #include <type_traits>
 
@@ -296,12 +299,12 @@ template<bool neg_product, bool neg_addend> static void RV_XLEN_PREFIX(f_fma)(Ri
     TTSIM_VERIFY(fmt != 2, UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
     uint32_t r_dst = bits<11,7>(inst);
     uint32_t rm = bits<14,12>(inst);
+    TTSIM_VERIFY((rm <= 4) || (rm == 7), UndefinedBehavior, "rm=%d", rm);
     TTSIM_VERIFY(rm == 7, UnsupportedFunctionality, "rm=%d", rm);
     uint32_t r_src0 = bits<19,15>(inst);
     uint32_t r_src1 = bits<24,20>(inst);
     uint32_t r_src2 = bits<31,27>(inst);
 
-    TTSIM_ERROR_NOFMT(UntestedFunctionality);
     uint32_t a = p_hart->f_regs[r_src0];
     uint32_t b = p_hart->f_regs[r_src1];
     uint32_t c = p_hart->f_regs[r_src2];
@@ -325,43 +328,105 @@ static void RV_XLEN_PREFIX(f_alu)(RiscvHartState *p_hart, uint32_t inst) {
     TTSIM_VERIFY(fmt != 1, UndefinedBehavior, "babyrisc does not support D");
     TTSIM_VERIFY(fmt != 3, UndefinedBehavior, "babyrisc does not support Q");
     TTSIM_VERIFY(fmt != 2, UnsupportedFunctionality, "babyrisc non-compliant Zfh extension is out of scope");
-    //uint32_t r_dst = bits<11,7>(inst);
-    //uint32_t r_src0 = bits<19,15>(inst);
-    //uint32_t r_src1 = bits<24,20>(inst);
+    uint32_t r_dst = bits<11,7>(inst);
+    uint32_t r_src0 = bits<19,15>(inst);
+    uint32_t r_src1 = bits<24,20>(inst);
 
+    uint32_t a = p_hart->f_regs[r_src0];
+    uint32_t b = p_hart->f_regs[r_src1];
     switch (funct7) {
-        case 0x00: TTSIM_ERROR(UnimplementedFunctionality, "FADD.S");
-        case 0x04: TTSIM_ERROR(UnimplementedFunctionality, "FSUB.S");
-        case 0x08: TTSIM_ERROR(UnimplementedFunctionality, "FMUL.S");
+        case 0x00: // FADD.S
+            TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FADD.S rm=%d", funct3);
+            TTSIM_VERIFY(funct3 == 7, UnsupportedFunctionality, "FADD.S rm=%d", funct3);
+            p_hart->f_regs[r_dst] = fma_model(a, 0x3F800000, b);
+            break;
+        case 0x04: // FSUB.S
+            TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FSUB.S rm=%d", funct3);
+            TTSIM_VERIFY(funct3 == 7, UnsupportedFunctionality, "FSUB.S rm=%d", funct3);
+            p_hart->f_regs[r_dst] = fma_model(a, 0x3F800000, b ^ 0x80000000);
+            break;
+        case 0x08: // FMUL.S
+            TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FMUL.S rm=%d", funct3);
+            TTSIM_VERIFY(funct3 == 7, UnsupportedFunctionality, "FMUL.S rm=%d", funct3);
+            p_hart->f_regs[r_dst] = fma_model(a, b, (a ^ b) & 0x80000000);
+            break;
         case 0x0C: TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support FDIV");
         case 0x10:
             switch (funct3) {
-                case 0: TTSIM_ERROR(UnimplementedFunctionality, "FSGNJ.S");
-                case 1: TTSIM_ERROR(UnimplementedFunctionality, "FSGNJN.S");
-                case 2: TTSIM_ERROR(UnimplementedFunctionality, "FSGNJX.S");
+                case 0: p_hart->f_regs[r_dst] = (a & 0x7FFFFFFF) | (b & 0x80000000); break; // FSGNJ.S
+                case 1: p_hart->f_regs[r_dst] = (a & 0x7FFFFFFF) | (~b & 0x80000000); break; // FSGNJN.S
+                case 2: p_hart->f_regs[r_dst] = a ^ (b & 0x80000000); break; // FSGNJX.S
                 default: TTSIM_ERROR(UndefinedBehavior, "FSGNJ funct3=%d", funct3);
             }
             break;
         case 0x14:
             switch (funct3) {
-                case 0: TTSIM_ERROR(UnimplementedFunctionality, "FMIN.S");
-                case 1: TTSIM_ERROR(UnimplementedFunctionality, "FMAX.S");
+                case 0: p_hart->f_regs[r_dst] = fp32_min_max(a, b, false); break; // FMIN.S
+                case 1: p_hart->f_regs[r_dst] = fp32_min_max(a, b, true); break; // FMAX.S
                 default: TTSIM_ERROR(UndefinedBehavior, "FMINMAX funct3=%d", funct3);
             }
             break;
         case 0x2C: TTSIM_ERROR(UndefinedBehavior, "babyrisc does not support FSQRT");
-        case 0x50:
+        case 0x50: {
+            uint32_t value;
+            bool ordered = !fp32_is_nan(a) && !fp32_is_nan(b);
             switch (funct3) {
-                case 0: TTSIM_ERROR(UnimplementedFunctionality, "FLE.S");
-                case 1: TTSIM_ERROR(UnimplementedFunctionality, "FLT.S");
-                case 2: TTSIM_ERROR(UnimplementedFunctionality, "FEQ.S");
+                case 0: value = ordered && (fp32_lt_ordered(a, b) || fp32_eq_ordered(a, b)); break; // FLE.S
+                case 1: value = ordered && fp32_lt_ordered(a, b); break; // FLT.S
+                case 2: value = ordered && fp32_eq_ordered(a, b); break; // FEQ.S
                 default: TTSIM_ERROR(UndefinedBehavior, "FCMP funct3=%d", funct3);
             }
+            if (r_dst) [[likely]] {
+                p_hart->x_regs[r_dst] = value;
+            }
             break;
-        case 0x60: TTSIM_ERROR(UnimplementedFunctionality, "FCVT.W");
-        case 0x68: TTSIM_ERROR(UnimplementedFunctionality, "FCVT.S");
-        case 0x70: TTSIM_ERROR(UnimplementedFunctionality, "FMV.X.W/FCLASS.S");
-        case 0x78: TTSIM_ERROR(UnimplementedFunctionality, "FMV.W.X");
+        }
+        case 0x60: {
+            TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FCVT rm=%d", funct3);
+            TTSIM_VERIFY((funct3 == 0) || (funct3 == 7), UnsupportedFunctionality, "FCVT rm=%d", funct3);
+            uint32_t value;
+            switch (r_src1) {
+                case 0: value = fp32_to_i32(a); break; // FCVT.W.S
+                case 1: value = fp32_to_u32(a); break; // FCVT.WU.S
+                default: TTSIM_ERROR(UndefinedBehavior, "FCVT.W r_src1=%d", r_src1);
+            }
+            if (r_dst) [[likely]] {
+                p_hart->x_regs[r_dst] = value;
+            }
+            break;
+        }
+        case 0x68: {
+            TTSIM_VERIFY((funct3 <= 4) || (funct3 == 7), UndefinedBehavior, "FCVT rm=%d", funct3);
+            TTSIM_VERIFY((funct3 == 0) || (funct3 == 7), UnsupportedFunctionality, "FCVT rm=%d", funct3);
+            uint32_t value;
+            switch (r_src1) {
+                case 0: value = i32_to_fp32(p_hart->x_regs[r_src0]); break; // FCVT.S.W
+                case 1: value = u32_to_fp32(p_hart->x_regs[r_src0]); break; // FCVT.S.WU
+                default: TTSIM_ERROR(UndefinedBehavior, "FCVT.S r_src1=%d", r_src1);
+            }
+            p_hart->f_regs[r_dst] = value;
+            break;
+        }
+        case 0x70: {
+            TTSIM_VERIFY(!r_src1, UndefinedBehavior, "FMV.X.W/FCLASS.S r_src1=%d", r_src1);
+            uint32_t value;
+            switch (funct3) {
+                case 0: value = a; break; // FMV.X.W
+                case 1: value = fp32_classify(a); break; // FCLASS.S
+                default: TTSIM_ERROR(UndefinedBehavior, "funct7=0x%x funct3=%d", funct7, funct3);
+            }
+            if (r_dst) [[likely]] {
+                p_hart->x_regs[r_dst] = value;
+            }
+            break;
+        }
+        case 0x78:
+            TTSIM_VERIFY(!r_src1, UndefinedBehavior, "FMV.W.X r_src1=%d", r_src1);
+            switch (funct3) {
+                case 0: p_hart->f_regs[r_dst] = p_hart->x_regs[r_src0]; break; // FMV.W.X
+                default: TTSIM_ERROR(UndefinedBehavior, "funct7=0x%x funct3=%d", funct7, funct3);
+            }
+            break;
         default:
             TTSIM_ERROR(UndefinedBehavior, "funct7=0x%x funct3=%d", funct7, funct3);
     }
@@ -528,7 +593,6 @@ template<class T> static void RV_XLEN_PREFIX(f_load)(RiscvHartState *p_hart, uin
         uint32_t r_dst = bits<11,7>(inst);
         int_xlen_t imm = RISCV_I_IMM(inst);
 
-        TTSIM_ERROR_NOFMT(UntestedFunctionality);
         uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
         uint32_t value;
         if (!RV_XLEN_PREFIX(mem_rd)<uint32_t>(p_hart, addr, &value)) [[unlikely]] {
@@ -556,7 +620,6 @@ template<class T> static void RV_XLEN_PREFIX(f_store)(RiscvHartState *p_hart, ui
         uint32_t r_src = bits<24,20>(inst);
         int_xlen_t imm = RISCV_S_IMM(inst);
 
-        TTSIM_ERROR_NOFMT(UntestedFunctionality);
         uint_xlen_t addr = p_hart->x_regs[r_base] + imm;
         uint32_t value = p_hart->f_regs[r_src];
         if (!RV_XLEN_PREFIX(mem_wr)<uint32_t>(p_hart, addr, value)) [[unlikely]] {

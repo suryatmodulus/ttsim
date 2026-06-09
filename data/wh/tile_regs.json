@@ -264,7 +264,7 @@
           "offset": "0x58",
           "rw": "wo",
           "reset_value": null,
-          "name": "cfgreg_rd_cntl"
+          "name": "tensix_creg_read"
         },
         {
           "offset": "0x60",
@@ -294,7 +294,7 @@
           "offset": "0x78",
           "rw": "ro",
           "reset_value": null,
-          "name": "cfgreg_rddata"
+          "name": "tensix_creg_rddata"
         },
         {
           "offset": "0x1B0",
@@ -306,7 +306,7 @@
           "offset": "0x1F0",
           "rw": "ro",
           "reset_value": null,
-          "name": "wall_clock_l"
+          "name": "wall_clock_0"
         },
         {
           "offset": "0x1F4",
@@ -318,7 +318,7 @@
           "offset": "0x1F8",
           "rw": "ro",
           "reset_value": null,
-          "name": "wall_clock_h"
+          "name": "wall_clock_1_at"
         }
       ]
     },

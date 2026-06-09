@@ -3,8 +3,9 @@
 
 # make.py build rules for src/: codegen, compile, and link the simulator per chip and config.
 CHIPS = [
-    (0, 'wh'),
-    (1, 'bh'),
+    (0, 'wh', 'wh', 1),
+    (0, 'wh_x2', 'wh', 2),
+    (1, 'bh', 'bh', 1),
 ]
 
 def rules(ctx):
@@ -32,28 +33,34 @@ def rules(ctx):
     gen_h_files = [target]
 
     build_targets = []
-    for (tt_arch_version, chip) in CHIPS:
+    for (tt_arch_version, chip, data_chip, num_chips) in CHIPS:
         target = f'_out/{chip}/tensix_decode.h'
         script = 'tensix_gen_decode.py'
-        dep = f'../data/{chip}/tensix_isa.json'
-        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', chip, '--out', target])
+        dep = f'../data/{data_chip}/tensix_isa.json'
+        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', data_chip, '--out', target])
         chip_gen_h_files = gen_h_files + [target]
 
         target = f'_out/{chip}/tensix_regs.h'
         script = 'tensix_gen_regs.py'
-        dep = f'../data/{chip}/tensix_regs.json'
-        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', chip, '--out', target])
+        dep = f'../data/{data_chip}/tensix_regs.json'
+        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', data_chip, '--out', target])
         chip_gen_h_files += [target]
 
         target = f'_out/{chip}/tile_regs.h'
         script = 'tile_gen_regs.py'
-        dep = f'../data/{chip}/tile_regs.json'
-        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', chip, '--out', target])
+        dep = f'../data/{data_chip}/tile_regs.json'
+        ctx.rule(target, [script, dep], cmd=['python3', script, '--chip', data_chip, '--out', target])
         chip_gen_h_files += [target]
 
         for config in config_compile_opts:
             out_dir = f'_out/{config}_{chip}'
-            gcc_opts = [*compile_opts, *config_compile_opts[config], f'-DTT_ARCH_VERSION={tt_arch_version}', f'-I_out/{chip}']
+            gcc_opts = [
+                *compile_opts,
+                *config_compile_opts[config],
+                f'-DTT_ARCH_VERSION={tt_arch_version}',
+                f'-DNUM_CHIPS={num_chips}',
+                f'-I_out/{chip}',
+            ]
 
             c_files = ['libttsim.cpp', 'rv32.cpp', 'sim.cpp', 'tensix.cpp', 'tile.cpp', 'fma.cpp']
 

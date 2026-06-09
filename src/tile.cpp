@@ -12,6 +12,8 @@
 #define NONTENSIX_ROW_MASK 0x03
 #endif
 
+static std::pair<char, uint32_t> coord_to_tile(uint32_t coord);
+
 template<char tile_type>
 static inline auto get_tile(uint32_t tile_id) {
     static_assert((tile_type == 'T') || (tile_type == 'E'));
@@ -43,6 +45,10 @@ void t_tile_init(uint32_t tile_id) {
     }
 }
 
+#if TT_ARCH_VERSION == 0
+static void wh_x2_eth_link_init(uint32_t tile_id);
+#endif
+
 void e_tile_init(uint32_t tile_id) {
     EthTile *p_tile = &g_e_tiles[tile_id];
     for (uint32_t rv32_id = 0; rv32_id < std::size(p_tile->rv32); rv32_id++) {
@@ -70,6 +76,7 @@ void e_tile_init(uint32_t tile_id) {
     }
     p_tile->eth_txq_dest_mac_addr_lo[0] = 0xAB;
     p_tile->eth_txq_dest_mac_addr_lo[1] = 0xAA;
+    wh_x2_eth_link_init(tile_id);
 #elif TT_ARCH_VERSION == 1
     uint32_t jmp_addr = 0x71574;
     mem_wr<uint32_t>(&p_tile->sram[0x7CF00], jmp_addr); // send_eth_msg function address
@@ -106,8 +113,234 @@ void e_tile_init(uint32_t tile_id) {
 #define ARC_TELEMETRY_VALUES_CSM_OFFSET 0x200
 #define LEGACY_TELEM_FW_BUNDLE_VERSION 49
 #define FLASH_BUNDLE_VERSION 0x12040000 // v18.4
+#if NUM_CHIPS > 1
+#define BOARD_ID_HIGH 0x01000146 // N300 board id
+#define BOARD_ID_LOW 0x118320AE
+#else
 #define BOARD_ID_HIGH 0x180 // N150 board id
 #define BOARD_ID_LOW 0x1
+#endif
+#define WH_X2_MANGLED_BOARD_ID 0x618320AE
+#endif
+
+#if TT_ARCH_VERSION == 0
+#if NUM_CHIPS == 2
+static constexpr uint32_t WH_X2_LEGACY_REMOTE_QUEUE_BASE = 0x11080;
+static constexpr uint32_t WH_X2_LEGACY_REMOTE_QUEUE_SIZE = 0x2000;
+
+// The legacy remote queue is base-FW software state that physically lives in the
+// eth tile's L1/SRAM (0x11080 is within ETH_SRAM_SIZE), so it is modeled in the same
+// cells the FW uses (g_e_tiles[].sram) rather than a side array -- we fake the queue
+// behavior, not its location.
+static uint8_t *wh_x2_legacy_remote_queue_ptr(uint32_t tile_id, uint64_t addr, uint32_t size) {
+    if ((addr >= WH_X2_LEGACY_REMOTE_QUEUE_BASE) &&
+        (addr + size <= WH_X2_LEGACY_REMOTE_QUEUE_BASE + WH_X2_LEGACY_REMOTE_QUEUE_SIZE)) {
+        return &g_e_tiles[tile_id].sram[addr];
+    }
+    return nullptr;
+}
+
+static void wh_x2_legacy_remote_queue_update(uint32_t tile_id) {
+    constexpr uint32_t REQUEST_CMD_QUEUE_BASE = WH_X2_LEGACY_REMOTE_QUEUE_BASE;
+    constexpr uint32_t RESPONSE_CMD_QUEUE_BASE = REQUEST_CMD_QUEUE_BASE + 2 * 0xC0;
+    constexpr uint32_t REQUEST_ROUTING_CMD_QUEUE_BASE = REQUEST_CMD_QUEUE_BASE + 0x40;
+    constexpr uint32_t RESPONSE_ROUTING_CMD_QUEUE_BASE = RESPONSE_CMD_QUEUE_BASE + 0x40;
+    constexpr uint32_t ETH_ROUTING_DATA_BUFFER_ADDR = 0x12000;
+    constexpr uint32_t ROUTING_CMD_SRC_ADDR_TAG_OFFSET = 28;
+    constexpr uint32_t CMD_BUF_SIZE_MASK = 3;
+    constexpr uint32_t CMD_BUF_PTR_MASK = 7;
+    constexpr uint32_t MAX_L1_BLOCK_SIZE = 1024;
+    constexpr uint32_t MAX_DRAM_BLOCK_SIZE = 32 * 1024;
+    constexpr uint32_t CMD_WR_REQ = 1 << 0;
+    constexpr uint32_t CMD_RD_REQ = 1 << 2;
+    constexpr uint32_t CMD_RD_DATA = 1 << 3;
+    constexpr uint32_t CMD_DATA_BLOCK_DRAM = 1 << 4;
+    constexpr uint32_t CMD_DATA_BLOCK = 1 << 6;
+    constexpr uint32_t CMD_BROADCAST = 1 << 7;
+    constexpr uint32_t CMD_NOC_ID = 1 << 9;
+    constexpr uint32_t CMD_ORDERED = 1 << 12; // ordering hint; trivially satisfied by synchronous delivery
+
+    uint8_t *eth_sram = &g_e_tiles[tile_id].sram[0];
+    uint32_t wrptr = mem_rd<uint32_t>(&eth_sram[REQUEST_CMD_QUEUE_BASE + 0x20]) & CMD_BUF_PTR_MASK;
+    uint32_t rdptr = mem_rd<uint32_t>(&eth_sram[REQUEST_CMD_QUEUE_BASE + 0x30]) & CMD_BUF_PTR_MASK;
+    while (rdptr != wrptr) {
+        uint32_t cmd_id = rdptr & CMD_BUF_SIZE_MASK;
+        uint32_t cmd_addr = REQUEST_ROUTING_CMD_QUEUE_BASE + 32 * cmd_id;
+        uint64_t sys_addr = mem_rd<uint64_t>(&eth_sram[cmd_addr + 0]);
+        uint32_t data = mem_rd<uint32_t>(&eth_sram[cmd_addr + 8]);
+        uint32_t flags = mem_rd<uint32_t>(&eth_sram[cmd_addr + 12]);
+        uint64_t local_addr = sys_addr & ((1ull << 36) - 1);
+        uint32_t noc_x = (sys_addr >> 36) & 0x3F;
+        uint32_t noc_y = (sys_addr >> 42) & 0x3F;
+        uint32_t chip_x = (sys_addr >> 48) & 0x3F;
+        uint32_t chip_y = (sys_addr >> 54) & 0x3F;
+        uint32_t coord = remap_virtual_coordinate(0, noc_x | (noc_y << 6));
+        TTSIM_VERIFY(!chip_y && chip_x < NUM_CHIPS, UnimplementedFunctionality,
+            "legacy remote queue sys_addr=0x%llx", sys_addr);
+        TTSIM_VERIFY(!(flags & (CMD_BROADCAST | CMD_NOC_ID)), UnimplementedFunctionality,
+            "legacy remote queue flags=0x%x", flags);
+        // Error on any flag bit we don't model, rather than silently ignoring it: an
+        // unsupported command variant must fail loudly, not be mis-handled. CMD_ORDERED
+        // is allowed (synchronous in-order delivery satisfies it); CMD_MOD (scatter
+        // pages, 1<<13) and any other bit are not modeled, so they fall through to here.
+        TTSIM_VERIFY(!(flags & ~(CMD_WR_REQ | CMD_RD_REQ | CMD_RD_DATA | CMD_DATA_BLOCK_DRAM |
+                                 CMD_DATA_BLOCK | CMD_BROADCAST | CMD_NOC_ID | CMD_ORDERED)),
+            UnimplementedFunctionality, "legacy remote queue unsupported flags=0x%x", flags);
+
+        uint32_t saved_chip_id = g_current_chip_id;
+        uint8_t data_block[MAX_DRAM_BLOCK_SIZE];
+        if (flags & CMD_WR_REQ) {
+            if (flags & CMD_DATA_BLOCK) {
+                uint32_t max_block_size = (flags & CMD_DATA_BLOCK_DRAM) ? MAX_DRAM_BLOCK_SIZE : MAX_L1_BLOCK_SIZE;
+                TTSIM_VERIFY(data <= max_block_size, UnimplementedFunctionality, "legacy remote write size=%d", data);
+                const void *p_data = &eth_sram[ETH_ROUTING_DATA_BUFFER_ADDR + cmd_id * MAX_L1_BLOCK_SIZE];
+                if (flags & CMD_DATA_BLOCK_DRAM) {
+                    uint32_t src_addr_tag = mem_rd<uint32_t>(&eth_sram[cmd_addr + ROUTING_CMD_SRC_ADDR_TAG_OFFSET]);
+                    libttsim_pci_dma_mem_rd_bytes(src_addr_tag, data_block, data);
+                    p_data = data_block;
+                }
+                ttsim_select_chip(chip_x);
+                tile_wr_bytes(coord, local_addr, p_data, data);
+                ttsim_select_chip(saved_chip_id);
+            } else {
+                ttsim_select_chip(chip_x);
+                tile_wr_bytes(coord, local_addr, &data, sizeof(data));
+                ttsim_select_chip(saved_chip_id);
+            }
+            uint32_t wr_req = mem_rd<uint32_t>(&eth_sram[REQUEST_CMD_QUEUE_BASE + 0]);
+            mem_wr<uint32_t>(&eth_sram[REQUEST_CMD_QUEUE_BASE + 0], wr_req + 1);
+            mem_wr<uint32_t>(&eth_sram[REQUEST_CMD_QUEUE_BASE + 4], wr_req + 1);
+        } else if (flags & CMD_RD_REQ) {
+            uint32_t resp_wrptr = mem_rd<uint32_t>(&eth_sram[RESPONSE_CMD_QUEUE_BASE + 0x20]) & CMD_BUF_PTR_MASK;
+            uint32_t resp_id = resp_wrptr & CMD_BUF_SIZE_MASK;
+            uint32_t resp_addr = RESPONSE_ROUTING_CMD_QUEUE_BASE + 32 * resp_id;
+            if (flags & CMD_DATA_BLOCK) {
+                uint32_t max_block_size = (flags & CMD_DATA_BLOCK_DRAM) ? MAX_DRAM_BLOCK_SIZE : MAX_L1_BLOCK_SIZE;
+                TTSIM_VERIFY(data <= max_block_size, UnimplementedFunctionality, "legacy remote read size=%d", data);
+                ttsim_select_chip(chip_x);
+                tile_rd_bytes(coord, local_addr, data_block, data);
+                ttsim_select_chip(saved_chip_id);
+                if (flags & CMD_DATA_BLOCK_DRAM) {
+                    uint32_t src_addr_tag = mem_rd<uint32_t>(&eth_sram[cmd_addr + ROUTING_CMD_SRC_ADDR_TAG_OFFSET]);
+                    libttsim_pci_dma_mem_wr_bytes(src_addr_tag, data_block, data);
+                    mem_wr<uint32_t>(&eth_sram[resp_addr + 12], CMD_DATA_BLOCK | CMD_DATA_BLOCK_DRAM | CMD_RD_DATA);
+                } else {
+                    memcpy(&eth_sram[ETH_ROUTING_DATA_BUFFER_ADDR + resp_id * MAX_L1_BLOCK_SIZE], data_block, data);
+                    mem_wr<uint32_t>(&eth_sram[resp_addr + 12], CMD_DATA_BLOCK | CMD_RD_DATA);
+                }
+            } else {
+                uint32_t read_data;
+                ttsim_select_chip(chip_x);
+                tile_rd_bytes(coord, local_addr, &read_data, sizeof(read_data));
+                ttsim_select_chip(saved_chip_id);
+                mem_wr<uint32_t>(&eth_sram[resp_addr + 8], read_data);
+                mem_wr<uint32_t>(&eth_sram[resp_addr + 12], CMD_RD_DATA);
+            }
+            mem_wr<uint32_t>(&eth_sram[RESPONSE_CMD_QUEUE_BASE + 0x20], (resp_wrptr + 1) & CMD_BUF_PTR_MASK);
+        } else {
+            TTSIM_ERROR(UnimplementedFunctionality, "legacy remote queue flags=0x%x", flags);
+        }
+        rdptr = (rdptr + 1) & CMD_BUF_PTR_MASK;
+        mem_wr<uint32_t>(&eth_sram[REQUEST_CMD_QUEUE_BASE + 0x30], rdptr);
+    }
+}
+#endif
+
+bool wh_x2_legacy_remote_queue_host_rd(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
+#if NUM_CHIPS == 2
+    auto [tile_type, tile_id] = coord_to_tile(coord);
+    if (tile_type == 'E') {
+        uint8_t *p_src = wh_x2_legacy_remote_queue_ptr(tile_id, addr, size);
+        if (p_src) {
+            memcpy(p, p_src, size);
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void *p, uint32_t size) {
+#if NUM_CHIPS == 2
+    auto [tile_type, tile_id] = coord_to_tile(coord);
+    if (tile_type == 'E') {
+        uint8_t *p_dst = wh_x2_legacy_remote_queue_ptr(tile_id, addr, size);
+        if (p_dst) {
+            memcpy(p_dst, p, size);
+            if ((addr == WH_X2_LEGACY_REMOTE_QUEUE_BASE + 0x20) && (size == 4)) {
+                wh_x2_legacy_remote_queue_update(tile_id);
+            }
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+#if NUM_CHIPS == 2
+// Compile-time inter-chip Ethernet peer table for this build configuration
+// (n300 = 2x Wormhole): each row maps (src chip, src eth tile) -> (dst chip, dst eth
+// tile). A different topology (QB/LB, Galaxy) supplies a larger table and a larger
+// NUM_CHIPS with no other change. Links are listed in both directions.
+struct WhX2EthLink { uint8_t src_chip, src_tile, dst_chip, dst_tile; };
+static constexpr WhX2EthLink WH_X2_ETH_PEER_TABLE[] = {
+    {0, 8, 1, 0},
+    {0, 9, 1, 1},
+    {1, 0, 0, 8},
+    {1, 1, 0, 9},
+};
+#endif
+
+static bool wh_x2_eth_peer(uint32_t tile_id, uint32_t *p_chip_id, uint32_t *p_tile_id) {
+#if NUM_CHIPS == 2
+    for (const WhX2EthLink &link : WH_X2_ETH_PEER_TABLE) {
+        if ((link.src_chip == g_current_chip_id) && (link.src_tile == tile_id)) {
+            *p_chip_id = link.dst_chip;
+            *p_tile_id = link.dst_tile;
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+// Fake the eth link-training / boot_results state that UMD topology discovery reads, so
+// the n300's two chips present as a trained, connected pair. This is faithful
+// initialization data (nothing in the simulator consumes it; the actual inter-chip
+// transport is modeled separately), derived from the same WH_X2_ETH_PEER_TABLE used for
+// delivery so the advertised topology cannot drift from the routed one.
+static void wh_x2_eth_link_init(uint32_t tile_id) {
+#if NUM_CHIPS == 2
+    EthTile *p_tile = &g_e_tiles[tile_id];
+    uint32_t remote_chip_id = 0;
+    uint32_t remote_eth_id = 0;
+    if (wh_x2_eth_peer(tile_id, &remote_chip_id, &remote_eth_id)) {
+        mem_wr<uint32_t>(&p_tile->sram[0x1104], 1); // ETH_TRAIN_STATUS_ADDR = LINK_TRAIN_SUCCESS
+        mem_wr<uint32_t>(&p_tile->sram[0x104C], 0); // ROUTING_FIRMWARE_STATE = enabled
+        mem_wr<uint32_t>(&p_tile->sram[0x1C], 1); // ETH_HEARTBEAT_ADDR
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 64], WH_X2_MANGLED_BOARD_ID); // local board id lo
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 65], g_current_chip_id); // local ASIC id hi
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 72], WH_X2_MANGLED_BOARD_ID); // remote board id lo
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 73], remote_chip_id); // remote ASIC id hi
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 76], remote_eth_id); // remote eth id
+        mem_wr<uint32_t>(&p_tile->sram[0x1EC0 + 4 * 77], WH_X2_MANGLED_BOARD_ID); // remote board type
+    }
+#endif
+}
+#else
+bool wh_x2_legacy_remote_queue_host_rd(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
+    return false;
+}
+
+bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void *p, uint32_t size) {
+    return false;
+}
+#endif
+
+#if TT_ARCH_VERSION == 1
+static bool wh_x2_eth_peer(uint32_t tile_id, uint32_t *p_chip_id, uint32_t *p_tile_id) {
+    return false;
+}
 #endif
 
 void a_tile_init() {
@@ -118,16 +351,18 @@ void a_tile_init() {
     mem_wr<uint32_t>(
         &g_a_tile.csm[ARC_SMBUS_TELEMETRY_CSM_OFFSET + LEGACY_TELEM_FW_BUNDLE_VERSION * 4], FLASH_BUNDLE_VERSION);
 
-    static const struct {
+    // Not static: the table captures g_current_chip_id (ASIC_ID / ASIC_LOCATION below), so
+    // it must be rebuilt for each chip rather than frozen at the first chip's a_tile_init.
+    const struct {
         uint16_t tag;
         uint32_t value;
     } telem[] = {
         {1, BOARD_ID_HIGH},
         {2, BOARD_ID_LOW},
-        {3, 0x1},                       // ASIC_ID
+        {3, 1 + g_current_chip_id},     // ASIC_ID
         {4, 0x0},                       // HARVESTING_STATE
         {28, FLASH_BUNDLE_VERSION},
-        {52, 0x0},                      // ASIC_LOCATION
+        {52, g_current_chip_id},        // ASIC_LOCATION
     };
     constexpr uint32_t n = std::size(telem);
     mem_wr<uint32_t>(&g_a_tile.csm[ARC_TELEMETRY_TABLE_CSM_OFFSET + 0], 1); // version
@@ -382,9 +617,9 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
                 return p_tile->dbg_array_rd_data;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_ARRAY_RD_DATA in eth tile");
-        case RISCV_DEBUG_REGS_CFGREG_RDDATA: TTSIM_ERROR(UnimplementedFunctionality, "CFGREG_RDDATA");
 #endif
 #if TT_ARCH_VERSION == 1
+        case RISCV_DEBUG_REGS_DBG_RD_DATA: TTSIM_ERROR(UnimplementedFunctionality, "DBG_RD_DATA");
         case RISCV_DEBUG_REGS_DBG_INSTRN_BUF_STATUS: TTSIM_ERROR(UnimplementedFunctionality, "DBG_INSTRN_BUF_STATUS");
 #endif
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
@@ -392,10 +627,16 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
                 return p_tile->tensix[0].dst_32bit_addr_en ? 0x800 : 0;
             }
             TTSIM_ERROR(UnsupportedFunctionality, "DBG_FEATURE_DISABLE in eth tile");
+        case RISCV_DEBUG_REGS_TENSIX_CREG_RDDATA:
+            TTSIM_ERROR(UntestedFunctionality, "TENSIX_CREG_RDDATA");
+            if constexpr (tile_type == 'T') {
+                return p_tile->tensix_creg_rddata;
+            }
+            TTSIM_ERROR(UnsupportedFunctionality, "TENSIX_CREG_RDDATA in eth tile");
         case RISCV_DEBUG_REGS_SOFT_RESET_0: return p_tile->soft_reset_0;
-        case RISCV_DEBUG_REGS_WALL_CLOCK_L: return uint32_t(g_clock);
+        case RISCV_DEBUG_REGS_WALL_CLOCK_0: return uint32_t(g_clock);
         case RISCV_DEBUG_REGS_WALL_CLOCK_1: return uint32_t(g_clock >> 32); // high part, unlatched
-        case RISCV_DEBUG_REGS_WALL_CLOCK_H: return uint32_t(g_clock >> 32); // XXX add the latching behavior on this reg
+        case RISCV_DEBUG_REGS_WALL_CLOCK_1_AT: return uint32_t(g_clock >> 32); // XXX add the latching behavior on this reg
 #if TT_ARCH_VERSION == 1
         case RISCV_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE:
             if constexpr (tile_type == 'T') {
@@ -411,8 +652,16 @@ static uint32_t riscv_debug_regs_rd32(uint32_t tile_id, uint32_t tensix_id, uint
 static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t offset, uint32_t data) {
     TensixTile *p_tile = &g_t_tiles[tile_id];
     switch (offset) {
+#if TT_ARCH_VERSION == 1
+        case RISCV_DEBUG_REGS_DBG_BUS_CTRL: TTSIM_ERROR(UnimplementedFunctionality, "DBG_BUS_CTRL");
+#endif
+        case RISCV_DEBUG_REGS_TENSIX_CREG_READ:
+            TTSIM_ERROR(UntestedFunctionality, "TENSIX_CREG_READ");
+            TTSIM_VERIFY(data < TENSIX_CFG_STATE_SIZE*4, UnimplementedFunctionality,
+                "TENSIX_CREG_READ: data=0x%x", data);
+            p_tile->tensix_creg_rddata = tensix_cfg_rd32(&p_tile->tensix[0], 0, 4*data);
+            break;
 #if TT_ARCH_VERSION == 0
-        case RISCV_DEBUG_REGS_CFGREG_RD_CNTL: TTSIM_ERROR(UnimplementedFunctionality, "CFGREG_RD_CNTL");
         case RISCV_DEBUG_REGS_DBG_ARRAY_RD_EN:
             TTSIM_VERIFY(data <= 1, UnsupportedFunctionality, "DBG_ARRAY_RD_EN: data=0x%x", data);
             p_tile->dbg_array_rd_en = data;
@@ -428,8 +677,6 @@ static void riscv_debug_regs_wr32(uint32_t tile_id, uint32_t tensix_id, uint32_t
             p_tile->dbg_array_rd_data = p_tile->tensix[0].dst[row][2*sel] | (uint32_t(p_tile->tensix[0].dst[row][2*sel+1]) << 16);
             break;
         }
-#elif TT_ARCH_VERSION == 1
-        case RISCV_DEBUG_REGS_TENSIX_CREG_READ: TTSIM_ERROR(UnimplementedFunctionality, "TENSIX_CREG_READ");
 #endif
         case RISCV_DEBUG_REGS_DBG_FEATURE_DISABLE:
             TTSIM_VERIFY(!data || (data == 0x800), UnimplementedFunctionality, "DBG_FEATURE_DISABLE=0x%x", data);
@@ -1279,7 +1526,20 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
                 TTSIM_VERIFY(!(start_addr & 15), UnimplementedFunctionality, "eth_txq_transfer_start_addr=0x%x", start_addr);
                 TTSIM_VERIFY(!(size_bytes & 15), UnimplementedFunctionality, "eth_txq_transfer_size_bytes=0x%x", size_bytes);
                 TTSIM_VERIFY(!(dest_addr & 15), UnimplementedFunctionality, "eth_txq_dest_addr=0x%x", dest_addr);
-                TTSIM_ERROR(UnimplementedFunctionality, "eth_txq_cmd=0x%x", data);
+                uint32_t remote_chip_id = 0;
+                uint32_t remote_tile_id = 0;
+                TTSIM_VERIFY(wh_x2_eth_peer(tile_id, &remote_chip_id, &remote_tile_id), UnimplementedFunctionality,
+                    "eth_txq_cmd=0x%x tile_id=%d", data, tile_id);
+                TTSIM_VERIFY(start_addr + size_bytes <= ETH_SRAM_SIZE, UndefinedBehavior,
+                    "eth_txq_transfer_start_addr=0x%x eth_txq_transfer_size_bytes=0x%x", start_addr, size_bytes);
+                TTSIM_VERIFY(dest_addr + size_bytes <= ETH_SRAM_SIZE, UndefinedBehavior,
+                    "eth_txq_dest_addr=0x%x eth_txq_transfer_size_bytes=0x%x", dest_addr, size_bytes);
+                // eth_send_packet (ETH_TXQ_CMD_START_DATA): copy local L1 to the peer eth tile's L1
+                uint32_t saved_chip_id = g_current_chip_id;
+                ttsim_select_chip(remote_chip_id);
+                memcpy(&g_e_tiles[remote_tile_id].sram[dest_addr], &p_tile->sram[start_addr], size_bytes);
+                ttsim_select_chip(saved_chip_id);
+                p_tile->eth_txq_cmd[queue_id] = 0;
             } else if (data == 4) {
 #if TT_ARCH_VERSION == 0
                 TTSIM_VERIFY(queue_id != 1, UnimplementedFunctionality, "queue_id=%d", queue_id);
@@ -1287,7 +1547,19 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
                 TTSIM_VERIFY(queue_id != 2, UnimplementedFunctionality, "queue_id=%d", queue_id);
 #endif
                 TTSIM_VERIFY(!(p_tile->eth_txq_dest_addr[queue_id] & 3), UnimplementedFunctionality, "eth_txq_dest_addr=0x%x", p_tile->eth_txq_dest_addr[queue_id]);
-                TTSIM_ERROR(UnimplementedFunctionality, "eth_txq_cmd=0x%x", data);
+                uint32_t remote_chip_id = 0;
+                uint32_t remote_tile_id = 0;
+                TTSIM_VERIFY(wh_x2_eth_peer(tile_id, &remote_chip_id, &remote_tile_id), UnimplementedFunctionality,
+                    "eth_txq_cmd=0x%x tile_id=%d", data, tile_id);
+                // eth_write_remote_reg (ETH_TXQ_CMD_START_REG): 32-bit MMIO write to the peer eth tile
+                uint32_t saved_chip_id = g_current_chip_id;
+                uint32_t dest_addr = p_tile->eth_txq_dest_addr[queue_id];
+                uint32_t remote_reg_data = p_tile->eth_txq_remote_reg_data[queue_id];
+                ttsim_select_chip(remote_chip_id);
+                uint32_t coord = tile_to_coord('E', remote_tile_id);
+                tile_wr_bytes(coord, dest_addr, &remote_reg_data, sizeof(remote_reg_data));
+                ttsim_select_chip(saved_chip_id);
+                p_tile->eth_txq_cmd[queue_id] = 0;
             } else {
                 TTSIM_ERROR(UnimplementedFunctionality, "eth_txq_cmd=0x%x", data);
             }
@@ -1437,6 +1709,10 @@ static std::pair<bool, uint32_t> t_tile_mmio_rd32(uint32_t tile_id, uint32_t ris
 #endif
         case NOC_OVERLAY_BASE ... NOC_OVERLAY_BASE + 0x3FFFF:
             return {true, noc_overlay_rd32<'T'>(tile_id, addr - NOC_OVERLAY_BASE)};
+#if TT_ARCH_VERSION == 1
+        case TENSIX_DST_BASE ... TENSIX_DST_LIMIT:
+            TTSIM_ERROR(UnimplementedFunctionality, "tensix_dst: offset=0x%x", uint32_t(addr - TENSIX_DST_BASE));
+#endif
         case TENSIX_REGFILE_BASE ... TENSIX_REGFILE_LIMIT:
             return {true, tensix_regfile_rd32(tile_id, riscv_id, addr - TENSIX_REGFILE_BASE)};
         case TENSIX_PC_BUF_BASE ... TENSIX_PC_BUF_LIMIT:
@@ -1486,6 +1762,10 @@ static bool t_tile_mmio_wr32(uint32_t tile_id, uint32_t riscv_id, uint64_t addr,
         case TENSIX_MOP_CFG_BASE ... TENSIX_MOP_CFG_LIMIT:
             tensix_mop_cfg_wr32(tile_id, riscv_id, addr - TENSIX_MOP_CFG_BASE, data);
             return true;
+#if TT_ARCH_VERSION == 1
+        case TENSIX_DST_BASE ... TENSIX_DST_LIMIT:
+            TTSIM_ERROR(UnimplementedFunctionality, "tensix_dst: offset=0x%x", uint32_t(addr - TENSIX_DST_BASE));
+#endif
         case TENSIX_REGFILE_BASE ... TENSIX_REGFILE_LIMIT:
             tensix_regfile_wr32(tile_id, riscv_id, addr - TENSIX_REGFILE_BASE, data);
             return true;
@@ -1920,11 +2200,12 @@ void tile_wr_bytes(uint32_t coord, uint64_t addr, const void *p, uint32_t size) 
             if (addr == 0x9004) {
                 TTSIM_VERIFY(size == 4, UnimplementedFunctionality, "LAUNCH_ERISC_APP_FLAG size=0x%x", size);
                 uint32_t data = mem_rd<uint32_t>(p);
-                if (data && !mem_rd<uint32_t>(&g_e_tiles[tile_id].sram[addr])) { // Start active erisc core
+                uint32_t old_data = mem_rd<uint32_t>(&g_e_tiles[tile_id].sram[addr]);
+                if ((data == 1) && (old_data != 1)) { // Start active erisc core
                     g_e_tiles[tile_id].rv32[0].pc = 0x9040; // FIRMWARE_BASE
                     g_e_tiles[tile_id].rv32[0].x_regs[2] = 0xFFB01000;
                     ttsim_rv32_set_core_active('E', tile_id, 0, true);
-                } else if (!data && mem_rd<uint32_t>(&g_e_tiles[tile_id].sram[addr])) { // Stop active erisc core
+                } else if ((data == 0) && (old_data == 1)) { // Stop active erisc core
                     ttsim_rv32_set_core_active('E', tile_id, 0, false);
                 }
             }

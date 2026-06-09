@@ -21,6 +21,31 @@
       "name": "eth_risc_ctrl"
     },
     {
+      "base": "0xFFB14000",
+      "limit": "0xFFB15FFF",
+      "name": "brisc_local_mem"
+    },
+    {
+      "base": "0xFFB16000",
+      "limit": "0xFFB17FFF",
+      "name": "ncrisc_local_mem"
+    },
+    {
+      "base": "0xFFB18000",
+      "limit": "0xFFB18FFF",
+      "name": "trisc0_local_mem"
+    },
+    {
+      "base": "0xFFB1A000",
+      "limit": "0xFFB1AFFF",
+      "name": "trisc1_local_mem"
+    },
+    {
+      "base": "0xFFB1C000",
+      "limit": "0xFFB1CFFF",
+      "name": "trisc2_local_mem"
+    },
+    {
       "base": "0xFFB20000",
       "limit": "0xFFB2FFFF",
       "name": "noc0_regs"
@@ -39,6 +64,11 @@
       "base": "0xFFB80000",
       "limit": "0xFFB80FFF",
       "name": "tensix_mop_cfg"
+    },
+    {
+      "base": "0xFFBD8000",
+      "limit": "0xFFBDFFFF",
+      "name": "tensix_dst"
     },
     {
       "base": "0xFFE00000",
@@ -232,16 +262,34 @@
       "name": "riscv_debug_regs",
       "regs": [
         {
+          "offset": "0x54",
+          "rw": "wo",
+          "reset_value": null,
+          "name": "dbg_bus_ctrl"
+        },
+        {
           "offset": "0x58",
           "rw": "wo",
           "reset_value": null,
           "name": "tensix_creg_read"
         },
         {
+          "offset": "0x5C",
+          "rw": "ro",
+          "reset_value": null,
+          "name": "dbg_rd_data"
+        },
+        {
           "offset": "0x68",
           "rw": "rw",
           "reset_value": "0x00000000",
           "name": "dbg_feature_disable"
+        },
+        {
+          "offset": "0x78",
+          "rw": "ro",
+          "reset_value": null,
+          "name": "tensix_creg_rddata"
         },
         {
           "offset": "0xA8",
@@ -259,7 +307,7 @@
           "offset": "0x1F0",
           "rw": "ro",
           "reset_value": null,
-          "name": "wall_clock_l"
+          "name": "wall_clock_0"
         },
         {
           "offset": "0x1F4",
@@ -271,7 +319,7 @@
           "offset": "0x1F8",
           "rw": "ro",
           "reset_value": null,
-          "name": "wall_clock_h"
+          "name": "wall_clock_1_at"
         },
         {
           "offset": "0x228",
