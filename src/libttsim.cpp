@@ -6,7 +6,6 @@
 // be rare and should always correspond to physical ports/connectivity on the device.
 // The API/ABI contract and compatibility policy are documented in docs/libttsim_api.md.
 #include "sim.h"
-#include <algorithm>
 
 #define API_EXPORT __attribute((visibility("default")))
 
@@ -23,6 +22,13 @@
 #define BAR4_SIZE (32 * 1024*1024)
 #define REVISION_ID 1
 #endif
+
+// Multi-MMIO host enumeration: each host-visible chip is a distinct PCI device with its own BAR
+// windows. Device i's BARs are the device-0 bases offset by i * PER_DEVICE_PADDR_STRIDE, so a host
+// physical address uniquely identifies (device, intra-device offset). The stride exceeds every
+// BAR's top (BH BAR4 ends at 64GiB), so device ranges never overlap. For NUM_CHIPS==1 the offset
+// is always 0, leaving the single-chip layout byte-for-byte unchanged.
+#define PER_DEVICE_PADDR_STRIDE 0x1000000000ull // 64GiB
 
 #if TT_ARCH_VERSION == 0
 // WH BAR4 is mapped to the top 32MB of BAR0
@@ -120,7 +126,9 @@ extern "C" API_EXPORT void libttsim_set_pci_dma_mem_callbacks(
     s_pfn_libttsim_pci_dma_mem_wr_bytes = pci_dma_mem_wr;
 }
 
-static uint32_t pci_config_rd32(uint32_t offset) {
+static uint32_t pci_config_rd32(uint32_t device, uint32_t offset) {
+    // Each MMIO device's BARs live in its own host-physical window (see PER_DEVICE_PADDR_STRIDE).
+    [[maybe_unused]] uint64_t bar_off = uint64_t(device) * PER_DEVICE_PADDR_STRIDE;
     switch (offset) {
 #if TT_ARCH_VERSION == 0
         case 0x0: return 0x1E52 | (0x401E << 16); // vendor ID, device ID
@@ -128,21 +136,27 @@ static uint32_t pci_config_rd32(uint32_t offset) {
         case 0x0: return 0x1E52 | (0xB140 << 16); // vendor ID, device ID
 #endif
         case 0x08: return 0x12000000 | REVISION_ID;  // class code, subclass, prog-if, revision ID
-        case 0x10: return 0x4 | uint32_t(BAR0_BASE); // 64-bit, not prefetchable (?), low address bits
-        case 0x14: return uint32_t(BAR0_BASE >> 32); // high address bits
-        case 0x18: return 0x4 | uint32_t(BAR2_BASE); // 64-bit, not prefetchable (?), low address bits
-        case 0x1C: return uint32_t(BAR2_BASE >> 32); // high address bits
-        case 0x20: return 0x4 | uint32_t(BAR4_BASE); // 64-bit, not prefetchable (?), low address bits
-        case 0x24: return uint32_t(BAR4_BASE >> 32); // high address bits
+        case 0x10: return 0x4 | uint32_t(BAR0_BASE + bar_off); // 64-bit, not prefetchable (?), low address bits
+        case 0x14: return uint32_t((BAR0_BASE + bar_off) >> 32); // high address bits
+        case 0x18: return 0x4 | uint32_t(BAR2_BASE + bar_off); // 64-bit, not prefetchable (?), low address bits
+        case 0x1C: return uint32_t((BAR2_BASE + bar_off) >> 32); // high address bits
+        case 0x20: return 0x4 | uint32_t(BAR4_BASE + bar_off); // 64-bit, not prefetchable (?), low address bits
+        case 0x24: return uint32_t((BAR4_BASE + bar_off) >> 32); // high address bits
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
 }
 
 extern "C" API_EXPORT uint32_t libttsim_pci_config_rd32(uint32_t bus_device_function, uint32_t offset) {
     TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
-    TTSIM_VERIFY(!bus_device_function, UndefinedBehavior, "bus_device_function=0x%x", bus_device_function);
+    uint32_t function = bus_device_function & 7;
+    uint32_t device = (bus_device_function >> 3) & 0x1F;
+    uint32_t bus = bus_device_function >> 8; // normally only 8 bits, but validate none of these are set
+    TTSIM_VERIFY(!bus && !function, UndefinedBehavior, "bus_device_function=0x%x", bus_device_function);
     TTSIM_VERIFY(!(offset & 3), UndefinedBehavior, "misaligned offset=0x%x", offset);
-    return pci_config_rd32(offset);
+    if (device >= NUM_MMIO_CHIPS) {
+        return 0xFFFFFFFFu; // non-existent device terminates host enumeration (only MMIO chips are PCI devices)
+    }
+    return pci_config_rd32(device, offset);
 }
 
 extern "C" API_EXPORT void libttsim_pci_config_wr32(uint32_t bus_device_function, uint32_t offset, uint32_t data) {
@@ -152,7 +166,14 @@ extern "C" API_EXPORT void libttsim_pci_config_wr32(uint32_t bus_device_function
     TTSIM_ERROR_NOFMT(UnimplementedFunctionality);
 }
 
-static std::pair<uint32_t, uint64_t> tlb_translate(uint32_t offset, uint32_t size) {
+struct TlbTarget {
+    uint32_t coord;
+    uint32_t coord_start;
+    uint64_t addr;
+    bool mcast;
+};
+
+static TlbTarget tlb_translate(uint32_t offset, uint32_t size) {
 #if TT_ARCH_VERSION == 0
     uint32_t tlb_index, window_bits;
     if (offset < 0x9C00000) {
@@ -174,10 +195,17 @@ static std::pair<uint32_t, uint64_t> tlb_translate(uint32_t offset, uint32_t siz
     uint64_t addr_bits = tlb_cfg & ((1ull << n_addr_bits) - 1);
     uint64_t addr = (addr_bits << window_bits) | offset;
     tlb_cfg >>= n_addr_bits; // after this shift, bit positions correspond directly to the spec's "first bit" column relative to N
-    TTSIM_VERIFY(!(tlb_cfg & ~uint64_t(0x2C000FFF)), UnimplementedFunctionality, "tlb_cfg=0x%llx", tlb_cfg);
-    uint32_t coord = tlb_cfg & 0xFFF;
+    TTSIM_VERIFY(!(tlb_cfg & ~uint64_t(0x2EFFFFFF)), UnimplementedFunctionality, "tlb_cfg=0x%llx", tlb_cfg);
     uint32_t ordering = bits<27,26>(tlb_cfg);
     TTSIM_VERIFY(ordering != 3, UndefinedBehavior, "tlb_cfg ordering=%d", ordering);
+    bool mcast = bits<25,25>(tlb_cfg);
+    if (!mcast) {
+        TTSIM_VERIFY(!(tlb_cfg & 0x00FFF000), UnsupportedFunctionality,
+            "x_start/y_start set without mcast: tlb_cfg=0x%llx", tlb_cfg);
+    }
+    uint32_t coord = remap_virtual_coordinate(0, tlb_cfg & 0xFFF);
+    uint32_t coord_start = mcast ? remap_virtual_coordinate(0, (tlb_cfg >> 12) & 0xFFF) : 0;
+    return {coord, coord_start, addr, mcast};
 #elif TT_ARCH_VERSION == 1
     uint32_t tlb_index = offset / 0x200000;
     offset &= 0x1FFFFF;
@@ -192,10 +220,9 @@ static std::pair<uint32_t, uint64_t> tlb_translate(uint32_t offset, uint32_t siz
     TTSIM_VERIFY(ordering != 3, UnimplementedFunctionality, "tlb_cfg ordering=%d", ordering);
     uint64_t addr_bits = tlb_cfg0 | (uint64_t(tlb_cfg1 & 0x7FF) << 32);
     uint64_t addr = (uint64_t(addr_bits) << 21) | offset;
-    uint32_t coord = bits<22,11>(tlb_cfg1);
+    uint32_t coord = remap_virtual_coordinate(0, bits<22,11>(tlb_cfg1));
+    return {coord, 0, addr, false};
 #endif
-    coord = remap_virtual_coordinate(0, coord);
-    return {coord, addr};
 }
 
 #if TT_ARCH_VERSION == 1
@@ -218,9 +245,10 @@ static std::pair<uint32_t, uint64_t> tlb_translate_bar4(uint64_t offset, uint32_
 }
 #endif
 
-extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size) {
-    TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
-    TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
+// Worker for the currently-selected chip. The device-routing wrapper below selects the
+// chip from the host physical address; intra-chip recursion (BAR4->SOC) calls this
+// directly so it stays on that chip.
+static void pci_mem_rd_cur(uint64_t paddr, void *p, uint32_t size) {
     switch (paddr) {
         case BAR0_BASE ... BAR0_BASE + BAR0_SIZE - 1: {
             uint32_t offset = paddr - BAR0_BASE;
@@ -232,13 +260,14 @@ extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, ui
                 case 0x00000000 ... 0x193FFFFF:
 #endif
                 {
-                    auto [coord, addr] = tlb_translate(offset, size);
+                    auto target = tlb_translate(offset, size);
+                    TTSIM_VERIFY(!target.mcast, UndefinedBehavior, "multicast read");
 #if NUM_CHIPS > 1
-                    if (!wh_x2_legacy_remote_queue_host_rd(coord, addr, p, size)) {
-                        tile_rd_bytes(coord, addr, p, size);
+                    if (!wh_x2_legacy_remote_queue_host_rd(target.coord, target.addr, p, size)) {
+                        tile_rd_bytes(target.coord, target.addr, p, size);
                     }
 #else
-                    tile_rd_bytes(coord, addr, p, size);
+                    tile_rd_bytes(target.coord, target.addr, p, size);
 #endif
                     break;
                 }
@@ -281,7 +310,7 @@ extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, ui
             TTSIM_VERIFY(offset + size <= BAR4_SIZE, UndefinedBehavior, "bar4 overrun: offset=0x%llx size=%d", offset, size);
 #if TT_ARCH_VERSION == 0
             uint64_t soc_addr = BAR4_SOC_BASE + offset;
-            libttsim_pci_mem_rd_bytes(soc_addr, p, size);
+            pci_mem_rd_cur(soc_addr, p, size);
 #elif TT_ARCH_VERSION == 1
             auto [coord, addr] = tlb_translate_bar4(offset, size);
             tile_rd_bytes(coord, addr, p, size);
@@ -293,6 +322,23 @@ extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, ui
         default:
             TTSIM_ERROR(UndefinedBehavior, "paddr=0x%llx size=%d", paddr, size);
     }
+}
+
+// Route a host physical access to the owning MMIO device's chip, then translate within
+// that device's BAR windows. For NUM_CHIPS==1 this is a straight passthrough.
+extern "C" API_EXPORT void libttsim_pci_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size) {
+    TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
+    TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
+#if NUM_CHIPS > 1
+    uint32_t device = uint32_t(paddr / PER_DEVICE_PADDR_STRIDE);
+    TTSIM_VERIFY(device < NUM_MMIO_CHIPS, UndefinedBehavior, "paddr=0x%llx selects device %u", paddr, device);
+    uint32_t saved_chip_id = g_current_chip_id;
+    ttsim_select_chip(device);
+    pci_mem_rd_cur(paddr - uint64_t(device) * PER_DEVICE_PADDR_STRIDE, p, size);
+    ttsim_select_chip(saved_chip_id);
+#else
+    pci_mem_rd_cur(paddr, p, size);
+#endif
 }
 
 #if TT_ARCH_VERSION == 0
@@ -318,9 +364,7 @@ static void tlb_cfg_wr32(uint32_t index, uint32_t data) {
 }
 #endif
 
-extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size) {
-    TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
-    TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
+static void pci_mem_wr_cur(uint64_t paddr, const void *p, uint32_t size) {
     switch (paddr) {
         case BAR0_BASE ... BAR0_BASE + BAR0_SIZE - 1: {
             uint32_t offset = paddr - BAR0_BASE;
@@ -332,14 +376,34 @@ extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void 
                 case 0x00000000 ... 0x193FFFFF:
 #endif
                 {
-                    auto [coord, addr] = tlb_translate(offset, size);
+                    auto target = tlb_translate(offset, size);
+
+                    if (target.mcast) {
+                        uint32_t start_x = target.coord_start & 63, end_x = target.coord & 63;
+                        uint32_t start_y = target.coord_start >> 6, end_y = target.coord >> 6;
+                        TTSIM_VERIFY((start_x <= end_x) && (start_y <= end_y), UndefinedBehavior,
+                            "multicast start (%d,%d) past end (%d,%d)", start_x, start_y, end_x, end_y);
+                        TTSIM_VERIFY(!((1ull << start_x & NONTENSIX_COL_MASK) || (1ull << start_y & NONTENSIX_ROW_MASK) ||
+                                    (1ull << end_x & NONTENSIX_COL_MASK) || (1ull << end_y & NONTENSIX_ROW_MASK)),
+                                    UndefinedBehavior, "multicast rectangle not within Tensix grid");
+                        for (uint32_t y = start_y; y <= end_y; y++) {
+                            for (uint32_t x = start_x; x <= end_x; x++) {
+                                if ((1ull << x & NONTENSIX_COL_MASK) || (1ull << y & NONTENSIX_ROW_MASK)) {
+                                    continue;
+                                }
+                                uint32_t coord = x | (y << 6);
+                                tile_wr_bytes(coord, target.addr, p, size);
+                            }
+                        }
+                    } else {
 #if NUM_CHIPS > 1
-                    if (!wh_x2_legacy_remote_queue_host_wr(coord, addr, p, size)) {
-                        tile_wr_bytes(coord, addr, p, size);
-                    }
+                        if (!wh_x2_legacy_remote_queue_host_wr(target.coord, target.addr, p, size)) {
+                            tile_wr_bytes(target.coord, target.addr, p, size);
+                        }
 #else
-                    tile_wr_bytes(coord, addr, p, size);
+                        tile_wr_bytes(target.coord, target.addr, p, size);
 #endif
+                    }
                     break;
                 }
 #if TT_ARCH_VERSION == 0
@@ -403,7 +467,7 @@ extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void 
             TTSIM_VERIFY(offset + size <= BAR4_SIZE, UndefinedBehavior, "bar4 overrun: offset=0x%llx size=%d", offset, size);
 #if TT_ARCH_VERSION == 0
             uint64_t soc_addr = BAR4_SOC_BASE + offset;
-            libttsim_pci_mem_wr_bytes(soc_addr, p, size);
+            pci_mem_wr_cur(soc_addr, p, size);
 #elif TT_ARCH_VERSION == 1
             auto [coord, addr] = tlb_translate_bar4(offset, size);
             tile_wr_bytes(coord, addr, p, size);
@@ -417,6 +481,22 @@ extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void 
     }
 }
 
+extern "C" API_EXPORT void libttsim_pci_mem_wr_bytes(uint64_t paddr, const void *p, uint32_t size) {
+    TTSIM_VERIFY(s_ttsim_running, ConfigurationError, "sim is not running");
+    TTSIM_VERIFY(size, UndefinedBehavior, "size=%d", size);
+#if NUM_CHIPS > 1
+    uint32_t device = uint32_t(paddr / PER_DEVICE_PADDR_STRIDE);
+    TTSIM_VERIFY(device < NUM_MMIO_CHIPS, UndefinedBehavior, "paddr=0x%llx selects device %u", paddr, device);
+    uint32_t saved_chip_id = g_current_chip_id;
+    ttsim_select_chip(device);
+    pci_mem_wr_cur(paddr - uint64_t(device) * PER_DEVICE_PADDR_STRIDE, p, size);
+    ttsim_select_chip(saved_chip_id);
+#else
+    pci_mem_wr_cur(paddr, p, size);
+#endif
+}
+
+// XXX This currently assumes that the host system/IOMMU does not need to know which MMIO chip is originating the DMA
 void libttsim_pci_dma_mem_rd_bytes(uint64_t paddr, void *p, uint32_t size) {
     TTSIM_VERIFY(s_pfn_libttsim_pci_dma_mem_rd_bytes, ConfigurationError, "DMA read callback not installed");
     s_pfn_libttsim_pci_dma_mem_rd_bytes(paddr, p, size);

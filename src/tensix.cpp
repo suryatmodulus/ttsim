@@ -2220,10 +2220,8 @@ TENSIX_EXECUTE_PACR() {
                     }
                 }
                 if (p_config->STACC_RELU_ApplyRelu) {
-                    TTSIM_VERIFY((p_config->STACC_RELU_ApplyRelu == 1) || (p_config->STACC_RELU_ApplyRelu == 2),
-                        UnimplementedFunctionality, "apply_relu=%d", p_config->STACC_RELU_ApplyRelu);
-                    TTSIM_VERIFY(!p_config->STACC_RELU_ReluThreshold, UntestedFunctionality,
-                        "apply_relu=%d relu_threshold=0x%x", p_config->STACC_RELU_ApplyRelu, p_config->STACC_RELU_ReluThreshold);
+                    TTSIM_VERIFY(p_config->STACC_RELU_ApplyRelu <= 3,
+                        UnsupportedFunctionality, "apply_relu=%d", p_config->STACC_RELU_ApplyRelu);
                     TTSIM_VERIFY(!(p_config->STACC_RELU_ReluThreshold & 0x8000), UndefinedBehavior,
                         "negative relu_threshold=0x%x", p_config->STACC_RELU_ReluThreshold);
                     TTSIM_VERIFY((intermediate_format == 5) || (intermediate_format == 6), UnimplementedFunctionality,
@@ -2233,6 +2231,9 @@ TENSIX_EXECUTE_PACR() {
                     }
                     if ((p_config->STACC_RELU_ApplyRelu == 2) && (value <= p_config->STACC_RELU_ReluThreshold)) {
                         value = 0;
+                    }
+                    if ((p_config->STACC_RELU_ApplyRelu == 3) && (value > p_config->STACC_RELU_ReluThreshold)) {
+                        value = p_config->STACC_RELU_ReluThreshold;
                     }
                 }
                 if ((intermediate_format == 1) && (pack_dst_format == 0)) { // fp16 -> fp32 late conversion
@@ -3185,7 +3186,7 @@ TENSIX_EXECUTE_SFPLOADI() {
     uint32_t val;
     switch (instr_mod0) {
         case 0: val = imm16 << 16; break; // treat imm16 as bfloat16
-        case 1: { // simple fp16 -> fp32 by just biasing the exponent (no special cases)
+        case 1: { // fp16 -> fp32 by biasing the exponent (no special cases for inf/nan)
             uint32_t s = imm16 & 0x8000;
             uint32_t em = imm16 & 0x7FFF;
             val = (s << 16) | ((em + (112 << 10)) << 13);
@@ -3460,7 +3461,7 @@ TENSIX_EXECUTE_SFPIADD() {
 }
 
 TENSIX_EXECUTE_SFPSHFT() {
-#if TT_ARCH_VERSION == 1
+#if TT_ARCH_VERSION >= 1
     TTSIM_VERIFY((instr_mod1 <= 3) || (instr_mod1 == 5) || (instr_mod1 == 7), NonContractualBehavior, "invalid instr_mod1=%d", instr_mod1);
 #else
     TTSIM_VERIFY(instr_mod1 <= 1, NonContractualBehavior, "instr_mod1=%d", instr_mod1);
@@ -3473,7 +3474,7 @@ TENSIX_EXECUTE_SFPSHFT() {
 
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
     for_each_lane(mask, [=](uint32_t lane) {
-#if TT_ARCH_VERSION == 1
+#if TT_ARCH_VERSION >= 1
         uint32_t src = (instr_mod1 & 4) ? p_tensix->l_regs[lreg_c][lane] : p_tensix->l_regs[lreg_dest][lane];
 #else
         uint32_t src = p_tensix->l_regs[lreg_dest][lane];
@@ -4036,6 +4037,7 @@ TENSIX_EXECUTE_SFPCONFIG() {
 }
 
 TENSIX_EXECUTE_SFPSWAP() {
+    uint32_t lreg_c = lreg_src_c;
     TTSIM_VERIFY(lreg_dest < 12, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
     uint32_t vd_gets_min = 0xFFFFFFFF;
     switch (instr_mod1) {
@@ -4050,11 +4052,11 @@ TENSIX_EXECUTE_SFPSWAP() {
     uint32_t mask = p_tensix->cc_en ? p_tensix->cc : 0xFFFFFFFF;
     uint32_t lane_config = p_tensix->lane_config;
     if (lane_config & 4) {
-        TTSIM_VERIFY(lreg_src_c < 4, UnsupportedFunctionality, "lreg_src_c=%d", lreg_src_c);
+        TTSIM_VERIFY(lreg_c < 4, UnsupportedFunctionality, "lreg_c=%d", lreg_c);
         TTSIM_VERIFY(lreg_dest < 4, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
     }
     for_each_lane(mask, [=](uint32_t lane) {
-        uint32_t c = p_tensix->l_regs[lreg_src_c][lane];
+        uint32_t c = p_tensix->l_regs[lreg_c][lane];
         uint32_t d = p_tensix->l_regs[lreg_dest][lane];
         bool should_swap = true;
         if (instr_mod1) {
@@ -4071,14 +4073,14 @@ TENSIX_EXECUTE_SFPSWAP() {
         }
         if (should_swap) {
             if (lane_config & 4) {
-                p_tensix->l_regs[lreg_src_c][lane] = d;
+                p_tensix->l_regs[lreg_c][lane] = d;
                 p_tensix->l_regs[lreg_dest][lane] = c;
-                uint32_t vc_a = 4 + lreg_src_c;
+                uint32_t vc_a = 4 + lreg_c;
                 uint32_t vd_a = 4 + lreg_dest;
                 std::swap(p_tensix->l_regs[vc_a][lane], p_tensix->l_regs[vd_a][lane]);
             } else {
-                if (lreg_src_c < 8) {
-                    p_tensix->l_regs[lreg_src_c][lane] = d;
+                if (lreg_c < 8) {
+                    p_tensix->l_regs[lreg_c][lane] = d;
                 }
                 if (lreg_dest < 8) {
                     p_tensix->l_regs[lreg_dest][lane] = c;
@@ -4202,7 +4204,8 @@ TENSIX_EXECUTE_SFPLE() {
 }
 
 TENSIX_EXECUTE_SFPGT() {
-#if TT_ARCH_VERSION == 1
+#if TT_ARCH_VERSION >= 1
+    // instr_mod1 bit0 -> update CC result with (d > c); bit3 -> write lreg_dest all-1s/0s.
     TTSIM_VERIFY((instr_mod1 == 1) || (instr_mod1 == 8), UnsupportedFunctionality, "instr_mod1=%d", instr_mod1);
     TTSIM_VERIFY(lreg_dest < 8, UnsupportedFunctionality, "lreg_dest=%d", lreg_dest);
 

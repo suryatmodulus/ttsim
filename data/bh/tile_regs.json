@@ -731,6 +731,12 @@
       "name": "eth_ctrl_regs",
       "regs": [
         {
+          "offset": "0xC",
+          "rw": "ro",
+          "reset_value": null,
+          "name": "pcs_status"
+        },
+        {
           "offset": "0x150",
           "rw": "wo",
           "reset_value": null,

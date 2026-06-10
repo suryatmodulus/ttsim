@@ -142,6 +142,14 @@ struct Rv64HartState {
 #define TENSIX_THD_STATE_SIZE 57
 #endif
 
+#if TT_ARCH_VERSION == 0
+#define NONTENSIX_COL_MASK 0x21
+#define NONTENSIX_ROW_MASK 0x41
+#elif TT_ARCH_VERSION == 1
+#define NONTENSIX_COL_MASK 0x301
+#define NONTENSIX_ROW_MASK 0x03
+#endif
+
 struct TensixThreadState {
     THREAD_CFG0_REG_UNION()
     THREAD_CFG1_REG_UNION()
@@ -585,6 +593,9 @@ struct DramChannel {
 
 #if !defined(NUM_CHIPS)
 #define NUM_CHIPS 1
+#endif
+#if !defined(NUM_MMIO_CHIPS)
+#define NUM_MMIO_CHIPS 1
 #endif
 
 struct ChipState {

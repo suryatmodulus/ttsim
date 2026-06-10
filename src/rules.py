@@ -3,9 +3,12 @@
 
 # make.py build rules for src/: codegen, compile, and link the simulator per chip and config.
 CHIPS = [
-    (0, 'wh', 'wh', 1),
-    (0, 'wh_x2', 'wh', 2),
-    (1, 'bh', 'bh', 1),
+    # (tt_arch_version, chip, data_chip, num_chips, num_mmio_chips)
+    (0, 'wh',    'wh',  1, 1),
+    (0, 'wh_x2', 'wh',  2, 1),
+    (0, 'wh_x8', 'wh',  8, 4), # T3000/LoudBox: 4 n300 cards (4 MMIO + 4 eth-tunneled), 4x2 mesh
+    (1, 'bh',    'bh',  1, 1),
+    (1, 'bh_x2', 'bh',  2, 2),
 ]
 
 def rules(ctx):
@@ -33,7 +36,7 @@ def rules(ctx):
     gen_h_files = [target]
 
     build_targets = []
-    for (tt_arch_version, chip, data_chip, num_chips) in CHIPS:
+    for (tt_arch_version, chip, data_chip, num_chips, num_mmio_chips) in CHIPS:
         target = f'_out/{chip}/tensix_decode.h'
         script = 'tensix_gen_decode.py'
         dep = f'../data/{data_chip}/tensix_isa.json'
@@ -59,6 +62,7 @@ def rules(ctx):
                 *config_compile_opts[config],
                 f'-DTT_ARCH_VERSION={tt_arch_version}',
                 f'-DNUM_CHIPS={num_chips}',
+                f'-DNUM_MMIO_CHIPS={num_mmio_chips}',
                 f'-I_out/{chip}',
             ]
 

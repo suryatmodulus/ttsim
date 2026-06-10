@@ -4,14 +4,6 @@
 // Per-tile infrastructure: tile init, NOC routing, TDMA, Ethernet, DRAM, debug/config registers.
 #include "sim.h"
 
-#if TT_ARCH_VERSION == 0
-#define NONTENSIX_COL_MASK 0x21
-#define NONTENSIX_ROW_MASK 0x41
-#elif TT_ARCH_VERSION == 1
-#define NONTENSIX_COL_MASK 0x301
-#define NONTENSIX_ROW_MASK 0x03
-#endif
-
 static std::pair<char, uint32_t> coord_to_tile(uint32_t coord);
 
 template<char tile_type>
@@ -43,6 +35,50 @@ void t_tile_init(uint32_t tile_id) {
         p_tile->router_cfg_1[noc] = NONTENSIX_COL_MASK;
         p_tile->router_cfg_3[noc] = NONTENSIX_ROW_MASK;
     }
+}
+
+// Compile-time inter-chip Ethernet peer table for this build configuration. Each row
+// maps (src chip, src eth tile) -> (dst chip, dst eth tile); a different topology
+// (n300, P300, QB/LB, Galaxy) supplies a different table and a larger NUM_CHIPS with
+// no other change. Links are listed in both directions. The eth tile index is the eth
+// channel (ETH_CORES_NOC0[chan]).
+#if NUM_CHIPS > 1
+struct EthLink { uint8_t src_chip, src_tile, dst_chip, dst_tile; };
+static constexpr EthLink ETH_PEER_TABLE[] = {
+#if TT_ARCH_VERSION == 0
+#if NUM_CHIPS == 2
+    {0, 8, 1, 0}, {0, 9, 1, 1}, {1, 0, 0, 8}, {1, 1, 0, 9},
+#elif NUM_CHIPS == 8
+    {0, 6, 2, 6},   {2, 6, 0, 6},     {0, 7, 2, 7},   {2, 7, 0, 7},
+    {0, 8, 4, 0},   {4, 0, 0, 8},     {0, 9, 4, 1},   {4, 1, 0, 9},
+    {0, 14, 1, 14}, {1, 14, 0, 14},   {0, 15, 1, 15}, {1, 15, 0, 15},
+    {1, 0, 3, 0},   {3, 0, 1, 0},     {1, 1, 3, 1},   {3, 1, 1, 1},
+    {1, 8, 5, 0},   {5, 0, 1, 8},     {1, 9, 5, 1},   {5, 1, 1, 9},
+    {2, 8, 6, 0},   {6, 0, 2, 8},     {2, 9, 6, 1},   {6, 1, 2, 9},
+    {2, 14, 3, 14}, {3, 14, 2, 14},   {2, 15, 3, 15}, {3, 15, 2, 15},
+    {3, 8, 7, 0},   {7, 0, 3, 8},     {3, 9, 7, 1},   {7, 1, 3, 9},
+    {4, 6, 5, 6},   {5, 6, 4, 6},     {4, 7, 5, 7},   {5, 7, 4, 7},
+    {6, 6, 7, 6},   {7, 6, 6, 6},     {6, 7, 7, 7},   {7, 7, 6, 7},
+#endif
+#else
+    {0, 2, 1, 9}, {0, 3, 1, 8}, {1, 9, 0, 2}, {1, 8, 0, 3},
+#endif
+};
+#endif
+
+// Look up the inter-chip Ethernet peer of (current chip, tile_id). Returns false when
+// the tile has no peer (single-chip builds have no table; an unconnected tile misses).
+static bool eth_peer(uint32_t tile_id, uint32_t *p_chip_id, uint32_t *p_tile_id) {
+#if NUM_CHIPS > 1
+    for (const EthLink &link : ETH_PEER_TABLE) {
+        if ((link.src_chip == g_current_chip_id) && (link.src_tile == tile_id)) {
+            *p_chip_id = link.dst_chip;
+            *p_tile_id = link.dst_tile;
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 #if TT_ARCH_VERSION == 0
@@ -124,7 +160,7 @@ void e_tile_init(uint32_t tile_id) {
 #endif
 
 #if TT_ARCH_VERSION == 0
-#if NUM_CHIPS == 2
+#if NUM_CHIPS > 1
 static constexpr uint32_t WH_X2_LEGACY_REMOTE_QUEUE_BASE = 0x11080;
 static constexpr uint32_t WH_X2_LEGACY_REMOTE_QUEUE_SIZE = 0x2000;
 
@@ -138,6 +174,18 @@ static uint8_t *wh_x2_legacy_remote_queue_ptr(uint32_t tile_id, uint64_t addr, u
         return &g_e_tiles[tile_id].sram[addr];
     }
     return nullptr;
+}
+
+// Map a remote-queue command's destination mesh coordinate (chip_x, chip_y from sys_addr bits
+// 48-53/54-59) to a chip id. Must match the cluster descriptor's chips: [x, y, ...] coords.
+// n300 is a single row (id == chip_x); the 4x2 mesh (wh_x8/T3000) needs the 2-D grid.
+static uint32_t chip_coord_to_id(uint32_t chip_x, uint32_t chip_y) {
+#if NUM_CHIPS == 8
+    static constexpr uint8_t GRID[4][2] = {{4, 5}, {0, 1}, {2, 3}, {6, 7}};  // [chip_x][chip_y]
+    return (chip_x < 4 && chip_y < 2) ? GRID[chip_x][chip_y] : NUM_CHIPS;
+#else
+    return chip_y ? NUM_CHIPS : chip_x;
+#endif
 }
 
 static void wh_x2_legacy_remote_queue_update(uint32_t tile_id) {
@@ -172,10 +220,9 @@ static void wh_x2_legacy_remote_queue_update(uint32_t tile_id) {
         uint64_t local_addr = sys_addr & ((1ull << 36) - 1);
         uint32_t noc_x = (sys_addr >> 36) & 0x3F;
         uint32_t noc_y = (sys_addr >> 42) & 0x3F;
-        uint32_t chip_x = (sys_addr >> 48) & 0x3F;
-        uint32_t chip_y = (sys_addr >> 54) & 0x3F;
+        uint32_t chip_x = chip_coord_to_id((sys_addr >> 48) & 0x3F, (sys_addr >> 54) & 0x3F);  // -> chip id
         uint32_t coord = remap_virtual_coordinate(0, noc_x | (noc_y << 6));
-        TTSIM_VERIFY(!chip_y && chip_x < NUM_CHIPS, UnimplementedFunctionality,
+        TTSIM_VERIFY(chip_x < NUM_CHIPS, UnimplementedFunctionality,
             "legacy remote queue sys_addr=0x%llx", sys_addr);
         TTSIM_VERIFY(!(flags & (CMD_BROADCAST | CMD_NOC_ID)), UnimplementedFunctionality,
             "legacy remote queue flags=0x%x", flags);
@@ -247,7 +294,7 @@ static void wh_x2_legacy_remote_queue_update(uint32_t tile_id) {
 #endif
 
 bool wh_x2_legacy_remote_queue_host_rd(uint32_t coord, uint64_t addr, void *p, uint32_t size) {
-#if NUM_CHIPS == 2
+#if NUM_CHIPS > 1
     auto [tile_type, tile_id] = coord_to_tile(coord);
     if (tile_type == 'E') {
         uint8_t *p_src = wh_x2_legacy_remote_queue_ptr(tile_id, addr, size);
@@ -261,7 +308,7 @@ bool wh_x2_legacy_remote_queue_host_rd(uint32_t coord, uint64_t addr, void *p, u
 }
 
 bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void *p, uint32_t size) {
-#if NUM_CHIPS == 2
+#if NUM_CHIPS > 1
     auto [tile_type, tile_id] = coord_to_tile(coord);
     if (tile_type == 'E') {
         uint8_t *p_dst = wh_x2_legacy_remote_queue_ptr(tile_id, addr, size);
@@ -277,44 +324,17 @@ bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void
     return false;
 }
 
-#if NUM_CHIPS == 2
-// Compile-time inter-chip Ethernet peer table for this build configuration
-// (n300 = 2x Wormhole): each row maps (src chip, src eth tile) -> (dst chip, dst eth
-// tile). A different topology (QB/LB, Galaxy) supplies a larger table and a larger
-// NUM_CHIPS with no other change. Links are listed in both directions.
-struct WhX2EthLink { uint8_t src_chip, src_tile, dst_chip, dst_tile; };
-static constexpr WhX2EthLink WH_X2_ETH_PEER_TABLE[] = {
-    {0, 8, 1, 0},
-    {0, 9, 1, 1},
-    {1, 0, 0, 8},
-    {1, 1, 0, 9},
-};
-#endif
-
-static bool wh_x2_eth_peer(uint32_t tile_id, uint32_t *p_chip_id, uint32_t *p_tile_id) {
-#if NUM_CHIPS == 2
-    for (const WhX2EthLink &link : WH_X2_ETH_PEER_TABLE) {
-        if ((link.src_chip == g_current_chip_id) && (link.src_tile == tile_id)) {
-            *p_chip_id = link.dst_chip;
-            *p_tile_id = link.dst_tile;
-            return true;
-        }
-    }
-#endif
-    return false;
-}
-
 // Fake the eth link-training / boot_results state that UMD topology discovery reads, so
 // the n300's two chips present as a trained, connected pair. This is faithful
 // initialization data (nothing in the simulator consumes it; the actual inter-chip
-// transport is modeled separately), derived from the same WH_X2_ETH_PEER_TABLE used for
+// transport is modeled separately), derived from the same ETH_PEER_TABLE used for
 // delivery so the advertised topology cannot drift from the routed one.
 static void wh_x2_eth_link_init(uint32_t tile_id) {
 #if NUM_CHIPS == 2
     EthTile *p_tile = &g_e_tiles[tile_id];
     uint32_t remote_chip_id = 0;
     uint32_t remote_eth_id = 0;
-    if (wh_x2_eth_peer(tile_id, &remote_chip_id, &remote_eth_id)) {
+    if (eth_peer(tile_id, &remote_chip_id, &remote_eth_id)) {
         mem_wr<uint32_t>(&p_tile->sram[0x1104], 1); // ETH_TRAIN_STATUS_ADDR = LINK_TRAIN_SUCCESS
         mem_wr<uint32_t>(&p_tile->sram[0x104C], 0); // ROUTING_FIRMWARE_STATE = enabled
         mem_wr<uint32_t>(&p_tile->sram[0x1C], 1); // ETH_HEARTBEAT_ADDR
@@ -333,12 +353,6 @@ bool wh_x2_legacy_remote_queue_host_rd(uint32_t coord, uint64_t addr, void *p, u
 }
 
 bool wh_x2_legacy_remote_queue_host_wr(uint32_t coord, uint64_t addr, const void *p, uint32_t size) {
-    return false;
-}
-#endif
-
-#if TT_ARCH_VERSION == 1
-static bool wh_x2_eth_peer(uint32_t tile_id, uint32_t *p_chip_id, uint32_t *p_tile_id) {
     return false;
 }
 #endif
@@ -1528,7 +1542,7 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
                 TTSIM_VERIFY(!(dest_addr & 15), UnimplementedFunctionality, "eth_txq_dest_addr=0x%x", dest_addr);
                 uint32_t remote_chip_id = 0;
                 uint32_t remote_tile_id = 0;
-                TTSIM_VERIFY(wh_x2_eth_peer(tile_id, &remote_chip_id, &remote_tile_id), UnimplementedFunctionality,
+                TTSIM_VERIFY(eth_peer(tile_id, &remote_chip_id, &remote_tile_id), UnimplementedFunctionality,
                     "eth_txq_cmd=0x%x tile_id=%d", data, tile_id);
                 TTSIM_VERIFY(start_addr + size_bytes <= ETH_SRAM_SIZE, UndefinedBehavior,
                     "eth_txq_transfer_start_addr=0x%x eth_txq_transfer_size_bytes=0x%x", start_addr, size_bytes);
@@ -1549,7 +1563,7 @@ static void eth_txq_regs_wr32(uint32_t tile_id, uint32_t offset, uint32_t data) 
                 TTSIM_VERIFY(!(p_tile->eth_txq_dest_addr[queue_id] & 3), UnimplementedFunctionality, "eth_txq_dest_addr=0x%x", p_tile->eth_txq_dest_addr[queue_id]);
                 uint32_t remote_chip_id = 0;
                 uint32_t remote_tile_id = 0;
-                TTSIM_VERIFY(wh_x2_eth_peer(tile_id, &remote_chip_id, &remote_tile_id), UnimplementedFunctionality,
+                TTSIM_VERIFY(eth_peer(tile_id, &remote_chip_id, &remote_tile_id), UnimplementedFunctionality,
                     "eth_txq_cmd=0x%x tile_id=%d", data, tile_id);
                 // eth_write_remote_reg (ETH_TXQ_CMD_START_REG): 32-bit MMIO write to the peer eth tile
                 uint32_t saved_chip_id = g_current_chip_id;
@@ -1648,6 +1662,7 @@ static uint32_t eth_ctrl_regs_rd32(uint32_t tile_id, uint32_t offset) {
         case ETH_CTRL_REGS_ERISC_IRAM_LOAD: return p_tile->erisc_iram_load;
 #elif TT_ARCH_VERSION == 1
         case ETH_CTRL_REGS_MAC_RX_ADDR_ROUTING: return p_tile->eth_mac_rx_addr_routing;
+        case ETH_CTRL_REGS_PCS_STATUS: return 1; // link is always trained/up
 #endif
         default: TTSIM_ERROR(UnimplementedFunctionality, "offset=0x%x", offset);
     }
@@ -1807,6 +1822,8 @@ static uint32_t e_tile_mmio_rd32(uint32_t tile_id, uint64_t addr) {
         case RISCV_DEBUG_REGS_BASE ... RISCV_DEBUG_REGS_LIMIT:
             return riscv_debug_regs_rd32<'E'>(tile_id, 0, addr - RISCV_DEBUG_REGS_BASE);
 #if TT_ARCH_VERSION == 1
+        case ETH_RISC_CTRL_BASE + ETH_RISC_CTRL_IERISC_RESET_PC:
+            return p_tile->ierisc_reset_pc;
         case ETH_RISC_CTRL_BASE + ETH_RISC_CTRL_SUBORDINATE_IERISC_RESET_PC:
             return p_tile->subordinate_ierisc_reset_pc;
 #endif
@@ -1849,8 +1866,18 @@ static bool e_tile_mmio_wr32(uint32_t tile_id, uint64_t addr, uint32_t data) {
             if (data & 0x1000) { // Put second erisc into reset
                 ttsim_rv32_set_core_active('E', tile_id, 1, false);
             } else if (!ttsim_rv32_get_core_active('E', tile_id, 1)) { // Take second erisc out of reset
-                p_tile->rv32[1].pc = p_tile->subordinate_ierisc_reset_pc;
-                ttsim_rv32_set_core_active('E', tile_id, 1, true);
+                // Only start the subordinate erisc once its reset PC has been programmed.
+                // 0 guards against running it when multi-erisc mode is disabled and metal
+                // never set it up -- mirrors the primary erisc guard above (without this,
+                // erisc1 runs from a garbage PC with an invalid stack pointer).
+                if (p_tile->subordinate_ierisc_reset_pc) {
+                    p_tile->rv32[1].pc = p_tile->subordinate_ierisc_reset_pc;
+                    // Establish the stack pointer the faked base FW would have set before
+                    // jumping to the app entry (the app starts with a C prologue that
+                    // assumes a valid sp); matches the ETH_MAILBOX release-core path.
+                    p_tile->rv32[1].x_regs[2] = 0xFFB02000;
+                    ttsim_rv32_set_core_active('E', tile_id, 1, true);
+                }
             }
 #else
             TTSIM_VERIFY((data & ~0x800) == 0, UnimplementedFunctionality, "soft reset 0x%x", data);
