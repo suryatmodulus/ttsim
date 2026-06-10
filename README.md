@@ -20,8 +20,8 @@ Quasar is pre-silicon and ships as a binary only.
 - **Wormhole/Blackhole**: Nearing feature complete, with a small number of remaining features and
   bugs under active debug. Can run many tt-metal, ttnn, tt-forge, and LLK examples/tests.
 
-- **Wormhole/Blackhole multichip**: *Experimental* `wh_x2` config (N300) is now available for preliminary
-  testing, with other configurations and more validation to come.
+- **Wormhole/Blackhole multichip**: *Experimental* `wh_x2` (N300), `wh_x8` (T3000/LoudBox), and `bh_x2`
+  (P300) configs are available for preliminary testing, with other configurations and more validation to come.
 
 - **Quasar**: DM cores and TRISCs can be taken out of reset. RV32/64 code and simple NOC transfers work.
   More tests and features are under active debug and bringup.
@@ -103,13 +103,16 @@ mode of operation. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to enable it.
 
 SFPLOADMACRO is not supported in the SFPU. Set `TT_METAL_DISABLE_SFPLOADMACRO=1` to disable its usage.
 
-Multichip support is in early stages and testing is incomplete. Use the `mcraighead/multichip` branch of
-`tt-metal` for the (not yet merged) software changes required to interface with the `wh_x2` simulator.
-Set the `TT_METAL_MOCK_CLUSTER_DESC_PATH` environment variable to point to a valid n300 cluster .yaml
-(e.g. `tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N300.yaml`) when running
-tt-metal tests. An example of a test that has been validated to run on N300 and not only pass but also
-dispatch work to both chips in both SD and FD mode is
+Multichip support is in early stages and testing is incomplete. Use the `mcraighead/mc-p300` branch of
+`tt-metal` for the (not yet merged) software changes required to interface with the `wh_x2`, `wh_x8`,
+and `bh_x2` simulator builds. Set the `TT_METAL_MOCK_CLUSTER_DESC_PATH` environment variable to point to
+a valid cluster .yaml (e.g. `tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N300.yaml`
+or `tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P300_both_mmio.yaml`)
+when running tt-metal tests. An example of a test that has been validated to run on N300 and not only pass
+but also dispatch work to both chips in both SD and FD mode is
 `tests/ttnn/unit_tests/base_functionality/test_multi_device.py::test_multi_device_single_op_binary`.
+On P300, this test has been validated in SD mode only. T3000 validation is currently very limited and only
+basic cluster detection and unit level tests are expected to work in this release.
 
 Quasar support is in early stages and testing is incomplete. The unit_tests_legacy test listed above was
 validated against tt-metal commit `ad73db77a3e135d225f9efe333e45ef9810387b0`, with `#define NOC_API_V2`
