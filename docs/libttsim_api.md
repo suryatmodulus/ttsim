@@ -15,8 +15,10 @@ public/private binary-equivalence commitment in the README applies to this inter
 ## Embedding model
 
 The library is a process-wide singleton. Its state lives in file-scope globals, so there is exactly
-one simulated device per process and the entry points are not associated with a handle or context
-object. A typical embedding:
+one library instance per process and the entry points are not associated with a handle or context
+object. A single library instance can present more than one chip: most builds simulate a single chip,
+but a multi-chip build exposes several chips as distinct host-visible PCIe devices through the same
+library (see [Config space](#config-space)). A typical embedding:
 
 1. Load `libttsim.so` and resolve the entry points below (e.g. via `dlopen`/`dlsym`).
 2. Optionally install DMA callbacks with `libttsim_set_pci_dma_mem_callbacks` (required before
@@ -67,11 +69,19 @@ uint32_t libttsim_pci_config_rd32(uint32_t bus_device_function, uint32_t offset)
 void     libttsim_pci_config_wr32(uint32_t bus_device_function, uint32_t offset, uint32_t data);
 ```
 
-32-bit PCI configuration-space access. `bus_device_function` must be 0 (the simulator presents a
-single function) and `offset` must be 4-byte aligned; other values are fatal errors. The config
-read at offset 0 returns the vendor and device ID identifying the simulated chip; the BAR
-base-address registers are also readable. `libttsim_pci_config_wr32` is reserved: it is part of the
-ABI but config-space writes are not currently implemented and calling it is a fatal error.
+32-bit PCI configuration-space access. `bus_device_function` is the conventional PCI bus/device/function
+tuple; the bus and function fields must be 0, and the device field selects which host-visible chip is
+addressed. A single-chip build exposes only device 0. A multi-chip build exposes each host-visible chip
+as a consecutive device number, and reading the config space of a device number beyond the last present
+chip returns all-ones (`0xFFFFFFFF`) - the conventional "no device" response - so a host can enumerate
+the chips by walking device numbers until it reads all-ones.
+
+`offset` must be 4-byte aligned; other values are fatal errors. The config read at offset 0 returns
+the vendor and device ID identifying the simulated chip; the BAR base-address registers are also
+readable, and each device's BARs occupy a distinct physical-address window (so the `paddr` passed
+to the memory-access functions identifies the target chip). `libttsim_pci_config_wr32` is reserved:
+it is part of the ABI but config-space writes are not currently implemented and calling it is a
+fatal error.
 
 ### Memory (BAR) access
 
